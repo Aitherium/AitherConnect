@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Get started with AitherConnect</title>
+<style>
+  :root {
+    --bg-primary: #030305;
+    --bg-secondary: rgba(15, 15, 20, 0.6);
+    --bg-hover: rgba(255, 255, 255, 0.05);
+    --accent: #22d3ee;
+    --accent-dim: rgba(34, 211, 238, 0.15);
+    --text-primary: #f2f2f5;
+    --text-secondary: #94a3b8;
+    --text-muted: #526072;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --error: #ef4444;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-bright: rgba(255, 255, 255, 0.15);
+    --radius: 8px;
+    --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 40px 28px 80px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    background-image: radial-gradient(circle at 50% -10%, rgba(34,211,238,0.08) 0%, transparent 50%);
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 800;
+    margin-bottom: 6px;
+    background: linear-gradient(135deg, #fff, var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 0.02em;
+  }
+  .subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 28px; }
+
+  /* Steps */
+  .steps {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  .step-pill {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    text-align: center;
+    transition: all 0.2s;
+  }
+  .step-pill.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .step-pill.done {
+    border-color: rgba(16,185,129,0.4);
+    color: var(--success);
+  }
+
+  .panel {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    margin-bottom: 16px;
+  }
+  .panel.hidden { display: none; }
+  .panel h2 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .panel p.desc {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-bottom: 22px;
+  }
+
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    margin-bottom: 5px;
+  }
+  .field input {
+    width: 100%;
+    padding: 10px 12px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 13px;
+  }
+  .field input:focus { outline: none; border-color: var(--accent); }
+
+  .actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 18px;
+  }
+  .btn {
+    padding: 10px 22px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn:hover { border-color: var(--border-bright); background: var(--bg-hover); }
+  .btn.primary {
+    background: linear-gradient(135deg, rgba(34,211,238,0.22), rgba(34,211,238,0.08));
+    border-color: rgba(34,211,238,0.45);
+    color: var(--accent);
+  }
+  .btn.primary:hover {
+    background: linear-gradient(135deg, rgba(34,211,238,0.32), rgba(34,211,238,0.15));
+    box-shadow: 0 6px 20px rgba(34,211,238,0.18);
+  }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* Mode cards */
+  .mode-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .mode-card {
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .mode-card:hover { border-color: var(--border-bright); background: var(--bg-hover); }
+  .mode-card.selected {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .mode-card .title { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+  .mode-card .body { font-size: 12px; color: var(--text-secondary); }
+  .mode-card .badge {
+    display: inline-block;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(34,211,238,0.12);
+    color: var(--accent);
+    margin-left: 6px;
+    vertical-align: 1px;
+  }
+
+  /* Install panel */
+  .install-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+  }
+  .install-row .who { font-size: 13px; font-weight: 600; }
+  .install-row .who .hint { display: block; font-size: 11px; color: var(--text-muted); font-weight: 400; margin-top: 2px; }
+  .install-row .status { font-size: 11px; font-family: var(--font-mono); padding: 4px 8px; border-radius: 4px; }
+  .install-row .status.ok { background: rgba(16,185,129,0.15); color: var(--success); }
+  .install-row .status.miss { background: rgba(148,163,184,0.12); color: var(--text-muted); }
+  .install-row .status.err { background: rgba(239,68,68,0.15); color: var(--error); }
+  .code-block {
+    margin: 10px 0 6px;
+    padding: 10px 12px;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    user-select: all;
+  }
+
+  .message {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .message.error { background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.25); color: var(--error); }
+  .message.success { background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.25); color: var(--success); }
+  .message.warn { background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.25); color: var(--warning); }
+
+  .small-link {
+    font-size: 12px;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: none;
+    border: none;
+    background: none;
+    padding: 0;
+  }
+  .small-link:hover { text-decoration: underline; }
+
+  .scope-list { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+  .scope-list span { color: var(--text-primary); }
+</style>
+</head>
+<body>
+  <h1>Welcome to AitherConnect</h1>
+  <p class="subtitle">Three steps to wire your browser into the AitherOS platform.</p>
+
+  <div class="steps">
+    <div class="step-pill active" id="pill-1">1 · Sign in</div>
+    <div class="step-pill" id="pill-2">2 · Pick a mode</div>
+    <div class="step-pill" id="pill-3">3 · Provision</div>
+  </div>
+
+  <!-- STEP 1: portal sign-in -->
+  <div class="panel" id="panel-1">
+    <h2>Sign in to portal.aitherium.com</h2>
+    <p class="desc">
+      Your portal account is the identity used to scope agents, workspaces, and
+      federated fleet membership. Don't have one yet?
+      <a class="small-link" id="open-signup" href="#">Create one</a>.
+    </p>
+
+    <div class="field">
+      <label>Portal URL</label>
+      <input type="text" id="portal-url" placeholder="https://portal.aitherium.com" />
+    </div>
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="login-email" placeholder="you@example.com" autocomplete="username" />
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" />
+    </div>
+
+    <div class="field hidden" id="twofa-field">
+      <label>Two-factor code</label>
+      <input type="text" id="login-2fa" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" />
+    </div>
+
+    <div id="step1-message"></div>
+
+    <div class="actions">
+      <button class="btn" id="skip-portal">Skip — use local only</button>
+      <button class="btn primary" id="do-login">Sign in</button>
+    </div>
+  </div>
+
+  <!-- STEP 2: mode -->
+  <div class="panel hidden" id="panel-2">
+    <h2>Choose a deployment mode</h2>
+    <p class="desc">You can change this later from the extension Settings page.</p>
+
+    <div class="mode-grid">
+      <div class="mode-card" data-mode="cloud">
+        <div class="title">☁️ Cloud only <span class="badge">easiest</span></div>
+        <div class="body">
+          All inference and storage runs on portal.aitherium.com. Nothing to
+          install locally. Best for trying AitherOS without a workstation setup.
+        </div>
+      </div>
+      <div class="mode-card" data-mode="hybrid">
+        <div class="title">🔌 Hybrid (local + portal) <span class="badge">recommended</span></div>
+        <div class="body">
+          AitherShell and AitherNode run on your machine; portal coordinates
+          identity, fleet, and shared knowledge. Best for power users.
+        </div>
+      </div>
+      <div class="mode-card" data-mode="local">
+        <div class="title">🖥️ Local only</div>
+        <div class="body">
+          Self-host the entire AitherOS stack on your machine. No portal traffic.
+          Use this for air-gapped or offline development.
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" id="back-to-1">Back</button>
+      <button class="btn primary" id="continue-to-3" disabled>Continue</button>
+    </div>
+  </div>
+
+  <!-- STEP 3: provision -->
+  <div class="panel hidden" id="panel-3">
+    <h2 id="step3-title">Provision</h2>
+    <p class="desc" id="step3-desc"></p>
+
+    <!-- Cloud / hybrid: portal agent registration -->
+    <div id="provision-portal" class="hidden">
+      <div class="field">
+        <label>Agent name for this browser</label>
+        <input type="text" id="agent-name" placeholder="my-browser-bot" />
+      </div>
+      <div id="provision-result"></div>
+    </div>
+
+    <!-- Hybrid / local: local stack detection + install hints -->
+    <div id="provision-local" class="hidden">
+      <div class="install-row" id="row-shell">
+        <div class="who">
+          AitherShell
+          <span class="hint">Local CLI for managing the stack</span>
+        </div>
+        <span class="status miss" id="status-shell">not detected</span>
+      </div>
+      <div class="code-block">pip install aithershell</div>
+
+      <div class="install-row" id="row-node">
+        <div class="who">
+          AitherNode
+          <span class="hint">MCP server + ADK runtime (port 8090)</span>
+        </div>
+        <span class="status miss" id="status-node">not detected</span>
+      </div>
+      <div class="code-block">pip install aithernode &amp;&amp; aithernode start --port 8090</div>
+
+      <button class="small-link" id="recheck-local" style="margin-top:6px;">Re-check local installation</button>
+    </div>
+
+    <div id="step3-message"></div>
+
+    <div class="actions">
+      <button class="btn" id="back-to-2">Back</button>
+      <button class="btn primary" id="finish">Finish setup</button>
+    </div>
+  </div>
+
+  <script src="../shared/portal-api.js"></script>
+  <script src="onboard.js"></script>
+</body>
+</html>

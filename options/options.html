@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    :root {
+      --bg-primary: #030305;
+      --bg-secondary: rgba(15, 15, 20, 0.6);
+      --bg-hover: rgba(255, 255, 255, 0.05);
+      --accent: #22d3ee;
+      --accent-dim: rgba(34, 211, 238, 0.15);
+      --text-primary: #f2f2f5;
+      --text-secondary: #94a3b8;
+      --text-muted: #526072;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --error: #ef4444;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-bright: rgba(255, 255, 255, 0.15);
+      --radius: 8px;
+      --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+      --font-mono: "JetBrains Mono", "Fira Code", monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      max-width: 620px;
+      margin: 0 auto;
+      padding: 32px 24px;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      line-height: 1.5;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 800;
+      margin-bottom: 4px;
+      background: linear-gradient(135deg, #fff, var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .subtitle { font-size: 12px; color: var(--text-muted); margin-bottom: 28px; }
+
+    /* ── Sections ─────────────────────── */
+    .section {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .section h2 {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--accent);
+      margin-bottom: 16px;
+    }
+    .section p.desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+    }
+
+    /* ── Mode toggle ─────────────────── */
+    .mode-toggle {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+    .mode-btn {
+      flex: 1;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: center;
+    }
+    .mode-btn:hover { border-color: var(--border-bright); background: var(--bg-hover); }
+    .mode-btn.active {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+      color: var(--accent);
+      box-shadow: 0 0 15px rgba(34, 211, 238, 0.12);
+    }
+
+    /* ── Form fields ─────────────────── */
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-secondary);
+      margin-bottom: 5px;
+    }
+    .field input {
+      width: 100%;
+      padding: 9px 12px;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      transition: border-color 0.15s;
+    }
+    .field input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 10px rgba(34, 211, 238, 0.1);
+    }
+    .field input::placeholder { color: var(--text-muted); }
+    .field .hint { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    .hidden { display: none !important; }
+
+    /* ── Buttons ──────────────────────── */
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 24px;
+    }
+    .btn {
+      padding: 10px 24px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn:hover { border-color: var(--border-bright); background: var(--bg-hover); }
+    .btn.primary {
+      background: linear-gradient(135deg, rgba(34, 211, 238, 0.2), rgba(34, 211, 238, 0.08));
+      border-color: rgba(34, 211, 238, 0.4);
+      color: var(--accent);
+    }
+    .btn.primary:hover {
+      background: linear-gradient(135deg, rgba(34, 211, 238, 0.3), rgba(34, 211, 238, 0.15));
+      box-shadow: 0 4px 15px rgba(34, 211, 238, 0.15);
+    }
+    .btn.danger { color: var(--error); border-color: rgba(239, 68, 68, 0.3); }
+    .btn.danger:hover { background: rgba(239, 68, 68, 0.1); }
+
+    /* ── Toggle switch ────────────────── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .toggle-row:last-child { border-bottom: none; }
+    .toggle-label { font-size: 13px; font-weight: 500; }
+    .toggle-hint { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+    .toggle-switch {
+      position: relative;
+      width: 40px; height: 22px;
+      flex-shrink: 0;
+      margin-left: 16px;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-switch .slider {
+      position: absolute; inset: 0;
+      background: rgba(255,255,255,0.08);
+      border-radius: 11px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle-switch .slider::before {
+      content: "";
+      position: absolute;
+      width: 16px; height: 16px;
+      left: 3px; bottom: 3px;
+      background: var(--text-secondary);
+      border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle-switch input:checked + .slider { background: var(--accent-dim); border: 1px solid rgba(34,211,238,0.4); }
+    .toggle-switch input:checked + .slider::before { transform: translateX(18px); background: var(--accent); }
+
+    /* ── Toast ────────────────────────── */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      padding: 10px 24px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 600;
+      opacity: 0;
+      transition: all 0.3s ease;
+      z-index: 100;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+    .toast.success { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); color: var(--success); }
+    .toast.error { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--error); }
+
+    /* ── Status ───────────────────────── */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #6b7280;
+      flex-shrink: 0;
+    }
+    .status-dot.online { background: var(--success); box-shadow: 0 0 8px rgba(16, 185, 129, 0.4); }
+    .status-dot.offline { background: var(--error); box-shadow: 0 0 6px rgba(239, 68, 68, 0.3); }
+  </style>
+</head>
+<body>
+  <h1>⚡ AitherConnect Settings</h1>
+  <p class="subtitle">Configure how AitherConnect communicates with AitherOS services</p>
+
+  <!-- Status -->
+  <div class="status-bar">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text">Checking connection...</span>
+  </div>
+
+  <!-- Connection Mode -->
+  <div class="section">
+    <h2>Connection Mode</h2>
+    <p class="desc">Choose how to connect: locally via port numbers, or remotely via a single URL.</p>
+
+    <div class="mode-toggle">
+      <button class="mode-btn active" data-mode="local" id="mode-local">
+        🖥️ Local<br><span style="font-size:10px;font-weight:400;color:var(--text-muted)">localhost ports</span>
+      </button>
+      <button class="mode-btn" data-mode="remote" id="mode-remote">
+        🌐 Remote<br><span style="font-size:10px;font-weight:400;color:var(--text-muted)">single base URL</span>
+      </button>
+      <button class="mode-btn" data-mode="cloud" id="mode-cloud">
+        ☁️ Cloud<br><span style="font-size:10px;font-weight:400;color:var(--text-muted)">aitherium.com</span>
+      </button>
+    </div>
+
+    <!-- Local settings -->
+    <div id="local-settings">
+      <div class="field">
+        <label>Base URL (legacy — local mode routes through Veil)</label>
+        <input type="text" id="baseUrl" placeholder="http://localhost" />
+        <div class="hint">Local mode uses Veil (HTTP:3000) as bridge proxy. Only change for LAN access.</div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Genesis Port</label>
+          <input type="number" id="genesisPort" placeholder="8001" />
+        </div>
+        <div class="field">
+          <label>Veil Port</label>
+          <input type="number" id="veilPort" placeholder="3000" />
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Mind Port</label>
+          <input type="number" id="mindPort" placeholder="8088" />
+        </div>
+        <div class="field">
+          <label>Pulse Port</label>
+          <input type="number" id="pulsePort" placeholder="8081" />
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Strata Port</label>
+          <input type="number" id="strataPort" placeholder="8136" />
+        </div>
+        <div class="field">
+          <label>Search Port</label>
+          <input type="number" id="searchPort" placeholder="8114" />
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Nexus Port</label>
+          <input type="number" id="nexusPort" placeholder="8122" />
+        </div>
+        <div class="field">
+          <label>Canvas Port</label>
+          <input type="number" id="canvasPort" placeholder="8108" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Remote / Cloud settings -->
+    <div id="remote-settings" class="hidden">
+      <div class="field">
+        <label>AitherOS URL</label>
+        <input type="text" id="remoteUrl" placeholder="https://aither.example.com" />
+        <div class="hint">All services are accessed through this URL via reverse proxy</div>
+      </div>
+      <div class="field">
+        <label>API Key / Bearer Token</label>
+        <input type="password" id="apiKey" placeholder="aither_pat_... or aither_sk_live_..." />
+        <div class="hint">Personal Access Token or ACTA API key — sent as Authorization: Bearer header</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Relay -->
+  <div class="section">
+    <h2>AitherRelay IRC</h2>
+    <div class="field">
+      <label>Relay URL</label>
+      <input type="text" id="relayUrl" placeholder="https://irc.aitherium.com" />
+    </div>
+    <div class="field">
+      <label>Relay WebSocket URL</label>
+      <input type="text" id="relayWsUrl" placeholder="wss://irc.aitherium.com/ws/chat" />
+    </div>
+  </div>
+
+  <!-- Tenant / Workspace / Project Scoping -->
+  <div class="section">
+    <h2>Platform Scoping</h2>
+    <p class="desc">Scope all AitherConnect requests to a specific tenant, workspace, and project. These headers are sent with every API call.</p>
+    <div class="field-row">
+      <div class="field">
+        <label>Tenant ID</label>
+        <input type="text" id="tenantId" placeholder="my-org" />
+        <div class="hint">X-Tenant-ID header — your org/company scope</div>
+      </div>
+      <div class="field">
+        <label>Project Name</label>
+        <input type="text" id="projectName" placeholder="my-project" />
+        <div class="hint">X-Project-Name header — project-level scope</div>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Workspace ID</label>
+        <input type="text" id="workspaceId" placeholder="ws-12345" />
+        <div class="hint">X-Workspace-ID header — workspace-level scope</div>
+      </div>
+      <div class="field">
+        <label>User ID</label>
+        <input type="text" id="userId" placeholder="user@example.com" />
+        <div class="hint">X-User-ID header — user identity</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Knowledge & Capture -->
+  <div class="section">
+    <h2>Knowledge & Capture</h2>
+    <p class="desc">Control how AitherConnect captures and ingests content into your knowledge base.</p>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Auto-Harvest Pages</div>
+        <div class="toggle-hint">Automatically capture page content on every visit. Ingests into memory, Nexus RAG, and Strata.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="autoHarvest" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Workspace Knowledge Routing</div>
+        <div class="toggle-hint">Route all KB ingests through /workspace/{id}/knowledge/ingest for workspace-scoped isolation. Requires Workspace ID above.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="workspaceKnowledge" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Tunnel -->
+  <div class="section">
+    <h2>Tunnel / Remote Access</h2>
+    <p class="desc">Quick presets for remote access via Aitherium cloud infrastructure.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn" id="btn-preset-tunnel" style="font-size:12px;padding:8px 14px;">tunnel.aitherium.com</button>
+      <button class="btn" id="btn-preset-irc" style="font-size:12px;padding:8px 14px;">irc.aitherium.com</button>
+      <button class="btn" id="btn-preset-demo" style="font-size:12px;padding:8px 14px;">demo.aitherium.com</button>
+      <button class="btn" id="btn-preset-local" style="font-size:12px;padding:8px 14px;">Local (127.0.0.1)</button>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="actions">
+    <button class="btn primary" id="btn-save">💾 Save Settings</button>
+    <button class="btn" id="btn-test">🔌 Test Connection</button>
+    <button class="btn danger" id="btn-reset">↺ Reset to Defaults</button>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

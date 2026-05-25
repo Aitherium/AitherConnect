@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AitherConnect — Microphone Access</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .card { background: #16213e; border-radius: 12px; padding: 40px; max-width: 400px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+    h2 { color: #7c6af7; margin-top: 0; }
+    .status { margin: 20px 0; padding: 12px; border-radius: 8px; font-weight: 600; }
+    .granted { background: #1b4332; color: #52b788; }
+    .denied { background: #3d0000; color: #e55; }
+    .waiting { background: #2a2a4a; color: #aaa; }
+    p { color: #999; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Microphone Access</h2>
+    <p>AitherConnect needs microphone access for voice-to-text input via Sonia (Whisper STT).</p>
+    <div id="status" class="status waiting">Requesting microphone access...</div>
+    <p id="hint" style="display:none;">You can close this tab now.</p>
+  </div>
+  <script>
+    (async () => {
+      const statusEl = document.getElementById("status");
+      const hintEl = document.getElementById("hint");
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(t => t.stop());
+        statusEl.textContent = "Microphone access granted!";
+        statusEl.className = "status granted";
+        hintEl.style.display = "";
+        // Auto-close after 2 seconds
+        setTimeout(() => window.close(), 2000);
+      } catch (e) {
+        statusEl.textContent = "Microphone access denied. Please allow and try again.";
+        statusEl.className = "status denied";
+      }
+    })();
+  </script>
+</body>
+</html>

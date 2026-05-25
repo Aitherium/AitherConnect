@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AitherConnect — Voice Input</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: #16213e; border-radius: 16px; padding: 40px; max-width: 360px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
+    h2 { color: #7c6af7; margin-bottom: 8px; font-size: 20px; }
+    .sub { color: #888; font-size: 13px; margin-bottom: 24px; }
+    #mic-btn { width: 80px; height: 80px; border-radius: 50%; border: 3px solid #7c6af7; background: #1a1a2e; color: #7c6af7; font-size: 36px; cursor: pointer; transition: all 0.2s; }
+    #mic-btn:hover { background: #222244; }
+    #mic-btn.recording { border-color: #e55; color: #e55; animation: pulse 1s infinite; }
+    #mic-btn.processing { border-color: #f0a030; color: #f0a030; cursor: wait; }
+    @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+    #status { margin-top: 16px; font-size: 14px; color: #aaa; min-height: 20px; }
+    #timer { margin-top: 8px; font-size: 24px; font-family: monospace; color: #7c6af7; min-height: 30px; }
+    .error { color: #e55; }
+    .success { color: #52b788; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Voice Input</h2>
+    <p class="sub">Click to record, click again to send to Whisper STT</p>
+    <button id="mic-btn">&#x1F3A4;</button>
+    <div id="timer"></div>
+    <div id="status"></div>
+  </div>
+  <script src="recorder.js"></script>
+</body>
+</html>

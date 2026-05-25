@@ -1,0 +1,97 @@
+{
+  "manifest_version": 3,
+  "name": "AitherConnect",
+  "version": "2.4.0",
+  "description": "Federated AI Search & AitherOS Desktop Bridge. Connects your browser to AitherOS for intelligent search, chat, and knowledge management.",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "activeTab",
+    "tabs",
+    "scripting",
+    "cookies",
+    "omnibox",
+    "contextMenus",
+    "notifications",
+    "alarms",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://127.0.0.1/*",
+    "http://localhost/*",
+    "https://localhost/*",
+    "https://*.aitherium.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*.slack.com/*",
+    "https://*.atlassian.net/*",
+    "https://github.com/*",
+    "*://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "AitherConnect",
+    "default_popup": "popup/popup.html"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+  "omnibox": {
+    "keyword": "ai"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.slack.com/*"],
+      "js": ["content/slack.js"]
+    },
+    {
+      "matches": ["https://*.atlassian.net/wiki/*", "https://*.atlassian.net/jira/*"],
+      "js": ["content/atlassian.js"]
+    },
+    {
+      "matches": ["https://github.com/*"],
+      "js": ["content/github.js"]
+    },
+    {
+      "matches": ["*://*/*"],
+      "js": ["content/harvester.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*/*"],
+      "js": ["content/agent-extractor.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*/*"],
+      "js": ["content/text-actions.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "commands": {
+    "analyze-selection": {
+      "suggested_key": {
+        "default": "Alt+A"
+      },
+      "description": "Analyze selected text with AitherOS"
+    },
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+A"
+      },
+      "description": "Open AitherConnect"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
