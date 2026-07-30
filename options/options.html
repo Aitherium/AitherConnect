@@ -246,6 +246,153 @@
     <span id="status-text">Checking connection...</span>
   </div>
 
+  <!-- Connectivity Tier -->
+  <div class="section">
+    <h2>Connectivity Tier</h2>
+    <p class="desc">AitherConnect auto-detects the best available tier every 30s. Override below or configure cloud access.</p>
+
+    <div class="field-row" style="margin-bottom:14px;">
+      <div class="field">
+        <label>Preferred Tier</label>
+        <select id="preferredTier" style="width:100%;padding:9px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:var(--font-mono);font-size:13px;">
+          <option value="auto">Auto-detect (recommended)</option>
+          <option value="genesis">Force: Genesis (Full AitherOS)</option>
+          <option value="node">Force: Node-Only</option>
+          <option value="cloud">Force: Cloud Gateway</option>
+          <option value="provider">AI Provider (BYOK)</option>
+        </select>
+        <div class="hint">Auto probes Genesis → AitherNode → Cloud every 30 seconds. BYOK uses your own LLM keys.</div>
+      </div>
+      <div class="field">
+        <label>Node Port</label>
+        <input type="number" id="nodePort" placeholder="8090" />
+        <div class="hint">AitherNode ADK standalone port (default: 8090)</div>
+      </div>
+    </div>
+
+    <div class="field" id="cloud-key-field">
+      <label>Cloud API Key</label>
+      <input type="password" id="cloudApiKey" placeholder="aither_sk_live_... or aither_pat_..." />
+      <div class="hint">Required for cloud-only tier. Use Connect below (device flow), or paste a key from portal.aitherium.com/settings/api-keys</div>
+      <button class="btn" id="btn-cloud-connect" style="margin-top:6px;font-size:12px;">☁️ Connect Cloud Gateway (sign in)</button>
+      <div id="cloud-connect-status" style="margin-top:6px;font-size:12px;font-family:var(--font-mono);"></div>
+    </div>
+
+    <div class="field" id="cloud-gateway-field">
+      <label>Cloud Gateway URL</label>
+      <input type="text" id="cloudGatewayUrl" placeholder="https://gateway.aitherium.com" />
+      <div class="hint">Default: gateway.aitherium.com. Only change for self-hosted gateways.</div>
+    </div>
+
+    <div class="field" id="mcp-url-field">
+      <label>MCP Gateway URL</label>
+      <input type="text" id="mcpUrl" placeholder="https://mcp.aitherium.com/mcp" />
+      <div class="hint">Default: mcp.aitherium.com. MCP endpoint for remote tool access (requires authentication).</div>
+    </div>
+
+    <button class="btn" id="btn-test-tiers" style="margin-top:8px;font-size:12px;">🔍 Test All Tiers</button>
+    <div id="tier-test-results" style="margin-top:8px;font-size:12px;font-family:var(--font-mono);"></div>
+  </div>
+
+  <!-- AI Provider (BYOK) -->
+  <div class="section hidden" id="provider-section">
+    <h2>AI Provider (BYOK)</h2>
+    <p class="desc">Use your own API keys for any LLM provider. Configuration saved locally (keys never sync to cloud).</p>
+
+    <div class="field">
+      <label>Provider</label>
+      <select id="providerSelect" style="width:100%;padding:9px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:var(--font-mono);font-size:13px;">
+        <option value="">Select a provider...</option>
+      </select>
+      <div class="hint">Select a provider or configure a custom endpoint</div>
+    </div>
+
+    <div class="field" id="provider-key-field">
+      <label>API Key</label>
+      <input type="password" id="providerApiKey" placeholder="sk-..." />
+      <div class="hint"><span id="provider-key-hint">Your API key (stored locally, never synced)</span></div>
+      <a id="provider-key-url" href="#" target="_blank" style="display:inline-block;margin-top:6px;font-size:12px;color:var(--accent);text-decoration:none;">Get a key</a>
+    </div>
+
+    <div class="field">
+      <label>Model</label>
+      <select id="providerModel" style="width:100%;padding:9px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:var(--font-mono);font-size:13px;">
+        <option value="">Select a model...</option>
+      </select>
+      <div class="hint" id="provider-model-hint"></div>
+      <button class="btn" id="btn-refresh-models" style="margin-top:6px;font-size:12px;">🔄 Refresh Models</button>
+      <div id="model-refresh-status" style="margin-top:6px;font-size:12px;font-family:var(--font-mono);"></div>
+    </div>
+
+    <div class="field" id="provider-custom-model-field" class="hidden">
+      <label>Custom Model</label>
+      <input type="text" id="providerCustomModel" placeholder="model-name" />
+      <div class="hint">Enter a custom model ID not in the list above</div>
+    </div>
+
+    <div class="field" id="provider-base-field">
+      <label>Base URL</label>
+      <input type="text" id="providerBaseUrl" placeholder="https://api.example.com" />
+      <div class="hint" id="provider-base-hint"></div>
+    </div>
+
+    <div class="field" id="provider-embedding-field">
+      <label>Embedding Model (optional)</label>
+      <input type="text" id="providerEmbeddingModel" placeholder="text-embedding-3-small" />
+      <div class="hint">Optional: embedding model for RAG. Leave empty for feature-hash fallback.</div>
+    </div>
+
+    <!-- On-Device (WebGPU) panel — shown only for the aither-local provider -->
+    <div class="field hidden" id="webml-panel">
+      <label>On-Device Models</label>
+      <div id="webml-caps" style="padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:var(--font-mono);margin-bottom:10px;">Checking WebGPU support...</div>
+      <div id="webml-models"></div>
+      <div class="hint">Models run entirely on your GPU — weights download once from huggingface.co and are cached locally. Nothing you type leaves this machine.</div>
+    </div>
+
+    <div class="field" id="provider-help-block" class="hidden">
+      <p style="font-size:12px;color:var(--text-muted);padding:10px;background:rgba(0,0,0,0.3);border-radius:6px;">
+        <strong>Ollama setup:</strong> Run <code style="background:rgba(0,0,0,0.5);padding:2px 6px;border-radius:3px;">OLLAMA_ORIGINS=chrome-extension://<span id="extension-id-span"></span> ollama serve</span></code>
+        <br/>(Windows: <code style="background:rgba(0,0,0,0.5);padding:2px 6px;border-radius:3px;">setx OLLAMA_ORIGINS chrome-extension://<span id="extension-id-span-2"></span></code> then restart Ollama)
+        <br/>
+        <button class="btn" id="btn-copy-ollama-cmd" style="margin-top:6px;font-size:11px;padding:6px 12px;">📋 Copy command</button>
+      </p>
+    </div>
+
+    <button class="btn" id="btn-test-provider" style="margin-top:8px;font-size:12px;">🧪 Test Key</button>
+    <div id="provider-test-status" style="margin-top:6px;font-size:12px;font-family:var(--font-mono);"></div>
+
+    <button class="btn primary" id="btn-save-provider" style="margin-top:12px;font-size:12px;padding:10px 24px;">💾 Save Provider</button>
+  </div>
+
+  <!-- License -->
+  <div class="section" id="license-section">
+    <h2>License</h2>
+    <p class="desc">Manage your AitherConnect license and tier.</p>
+
+    <div class="field">
+      <label>Current License Status</label>
+      <div style="padding:10px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:var(--font-mono);">
+        <div style="margin-bottom:6px;">
+          Tier: <span id="license-tier-badge" style="display:inline-block;padding:2px 8px;background:var(--accent-dim);color:var(--accent);border-radius:4px;font-weight:600;">Free</span>
+        </div>
+        <div id="license-email" style="margin-bottom:4px;"></div>
+        <div id="license-expiry" style="margin-bottom:4px;"></div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Paste License</label>
+      <textarea id="licenseEnvelope" placeholder="Paste your license envelope here..." style="width:100%;padding:9px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:var(--font-mono);font-size:11px;min-height:80px;resize:vertical;"></textarea>
+      <button class="btn" id="btn-activate-license" style="margin-top:6px;font-size:12px;">✓ Activate License</button>
+      <button class="btn danger" id="btn-remove-license" style="margin-top:6px;font-size:12px;">✕ Remove License</button>
+      <div id="license-status" style="margin-top:6px;font-size:12px;font-family:var(--font-mono);"></div>
+    </div>
+
+    <button class="btn" id="btn-start-trial" style="margin-top:8px;font-size:12px;">⏱️ Start 14-day Pro Trial</button>
+    <div id="trial-status" style="margin-top:6px;font-size:12px;font-family:var(--font-mono);"></div>
+  </div>
+
   <!-- Connection Mode -->
   <div class="section">
     <h2>Connection Mode</h2>
@@ -355,6 +502,11 @@
         <input type="text" id="projectName" placeholder="my-project" />
         <div class="hint">X-Project-Name header — project-level scope</div>
       </div>
+      <div class="field">
+        <label>Wiki Name</label>
+        <input type="text" id="wikiProject" placeholder="default" />
+        <div class="hint">LyraWiki name within the tenant — your knowledge base ({tenant}/{wiki})</div>
+      </div>
     </div>
     <div class="field-row">
       <div class="field">
@@ -370,15 +522,26 @@
     </div>
   </div>
 
-  <!-- Knowledge & Capture -->
+  <!-- Capture & Knowledge -->
   <div class="section">
-    <h2>Knowledge & Capture</h2>
-    <p class="desc">Control how AitherConnect captures and ingests content into your knowledge base.</p>
+    <h2>Capture & Knowledge</h2>
+    <p class="desc">Control local knowledge base and content capture settings.</p>
 
     <div class="toggle-row">
       <div>
-        <div class="toggle-label">Auto-Harvest Pages</div>
-        <div class="toggle-hint">Automatically capture page content on every visit. Ingests into memory, Nexus RAG, and Strata.</div>
+        <div class="toggle-label">Floating Text Actions on All Sites</div>
+        <div class="toggle-hint">Enable right-click context menu and floating toolbar for text selection across all websites.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="textActionsAllSites" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Auto-Capture Pages You Visit (Pro)</div>
+        <div class="toggle-hint">Automatically save page snapshots to your local knowledge base. Requires Pro tier.</div>
       </div>
       <label class="toggle-switch">
         <input type="checkbox" id="autoHarvest" />
@@ -388,8 +551,27 @@
 
     <div class="toggle-row">
       <div>
+        <div class="toggle-label">Ground Chat in Knowledge Base (RAG)</div>
+        <div class="toggle-hint">Use your local knowledge base to provide context and citations in chat responses.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="ragEnabled" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="field">
+      <label>Knowledge Base Status</label>
+      <div style="padding:10px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:6px;font-size:12px;">
+        <div id="kb-stats-line" style="margin-bottom:8px;font-family:var(--font-mono);">Loading KB stats...</div>
+        <button class="btn" id="btn-open-kb-manager" style="font-size:11px;padding:6px 12px;">📚 Open KB Manager</button>
+      </div>
+    </div>
+
+    <div class="toggle-row" style="margin-top:14px;">
+      <div>
         <div class="toggle-label">Workspace Knowledge Routing</div>
-        <div class="toggle-hint">Route all KB ingests through /workspace/{id}/knowledge/ingest for workspace-scoped isolation. Requires Workspace ID above.</div>
+        <div class="toggle-hint">Route all KB ingests through /workspace/{id}/knowledge/ingest for workspace-scoped isolation. Requires Workspace ID in Platform Scoping section.</div>
       </div>
       <label class="toggle-switch">
         <input type="checkbox" id="workspaceKnowledge" checked />
@@ -419,6 +601,26 @@
 
   <div class="toast" id="toast"></div>
 
+  <!-- Hidden settings fields (not exposed in UI, but preserved on save) -->
+  <input type="hidden" id="themisPort" />
+  <input type="hidden" id="newswirePort" />
+  <input type="hidden" id="relayPort" />
+  <input type="hidden" id="deepResearchPort" />
+  <input type="hidden" id="mediaforgePort" />
+  <input type="hidden" id="standaloneMode" />
+  <input type="hidden" id="sitePacksEnabled" />
+
+  <!-- Shared modules (required by options.js) -->
+  <script src="../shared/vendor/nacl.min.js"></script>
+  <!-- webml-mirror registry must load before providers.js (on-device models) -->
+  <script src="../shared/webml-mirror/models.iife.js"></script>
+  <script src="../shared/providers.js"></script>
+  <script src="../shared/license-verify.js"></script>
+  <script src="../shared/gating.js"></script>
+  <script src="../shared/feature-hash-embed.js"></script>
+  <script src="../shared/chunker.js"></script>
+  <script src="../shared/embeddings.js"></script>
+  <script src="../shared/kb-db.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

@@ -1,0 +1,30 @@
+{
+  "id": "regulations.gov",
+  "version": 1,
+  "name": "Regulations.gov federal comment form",
+  "match": ["https://www.regulations.gov/*"],
+  "waitFor": "textarea[placeholder*='comment' i]",
+  "roles": {
+    "comment_body": [
+      "textarea[placeholder*='comment' i]",
+      "textarea[aria-label*='comment' i]",
+      "textarea[name*='comment' i]",
+      "textarea"
+    ],
+    "email": [
+      "input[type='email']",
+      "input[placeholder*='email' i]",
+      "input[name*='email' i]"
+    ]
+  },
+  "identity": {
+    "kind": "text-cards",
+    "options": {
+      "individual": "An Individual",
+      "organization": "An Organization",
+      "anonymous": "Anonymous"
+    }
+  },
+  "captcha": ".g-recaptcha",
+  "submit": "button"
+}

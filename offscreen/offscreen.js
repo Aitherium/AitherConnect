@@ -10,9 +10,24 @@ let _chunks = [];
 let _stream = null;
 let _port = null;
 
-// Connect to background immediately on load
-_port = chrome.runtime.connect({ name: "offscreen-audio" });
-_port.onMessage.addListener(async (msg) => {
+// Connect to background immediately on load. The port dies when the service
+// worker restarts, so background can poke us ("offscreen-audio-reconnect")
+// to re-establish it without tearing down the whole document (which would
+// kill a running WebGPU inference in offscreen-inference.js).
+function connectAudioPort() {
+  _port = chrome.runtime.connect({ name: "offscreen-audio" });
+  _port.onDisconnect.addListener(() => { _port = null; });
+  _port.onMessage.addListener(onPortMessage);
+}
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === "offscreen-audio-reconnect") {
+    if (!_port) connectAudioPort();
+    sendResponse({ ok: true });
+  }
+});
+
+async function onPortMessage(msg) {
   if (msg.type === "start-recording") {
     try {
       await startRecording();
@@ -30,7 +45,9 @@ _port.onMessage.addListener(async (msg) => {
       _port.postMessage({ type: "recording-stopped", ok: false, error: e.message });
     }
   }
-});
+}
+
+connectAudioPort();
 
 async function startRecording() {
   if (_recorder && _recorder.state === "recording") return;

@@ -89,6 +89,41 @@
       flex-wrap: wrap;
       border-bottom: 1px solid var(--border);
     }
+
+    /* ── Account / plan ──────────────────────────────── */
+    .account-bar {
+      display: flex; align-items: center; gap: 9px;
+      padding: 9px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px; cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .account-bar:hover { background: var(--bg-hover); }
+    .account-icon { font-size: 15px; flex-shrink: 0; }
+    .account-main { flex: 1; min-width: 0; }
+    .account-email {
+      display: block; color: var(--text-primary); font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .account-sub { display: block; font-size: 9px; color: var(--text-muted); }
+    .tier-badge {
+      font-size: 9px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.05em; padding: 2px 7px; border-radius: 4px;
+      font-family: var(--font-mono); flex-shrink: 0;
+    }
+    .tier-badge.free  { background: rgba(148,163,184,0.15); color: #94a3b8; }
+    .tier-badge.trial { background: rgba(245,158,11,0.15); color: #fbbf24; }
+    .tier-badge.pro   { background: rgba(34,211,238,0.15); color: #22d3ee; border: 1px solid rgba(34,211,238,0.3); }
+    .feats-row {
+      display: flex; gap: 4px; flex-wrap: wrap;
+      padding: 8px 16px 10px; border-bottom: 1px solid var(--border);
+    }
+    .feat-pill {
+      font-size: 9px; font-family: var(--font-mono);
+      padding: 2px 6px; border-radius: 3px; background: rgba(255,255,255,0.03);
+    }
+    .feat-pill.on  { color: #10b981; border: 1px solid rgba(16,185,129,0.2); }
+    .feat-pill.off { color: #64748b; border: 1px solid rgba(100,116,139,0.15); }
     .svc-pill {
       font-size: 9px;
       font-family: var(--font-mono);
@@ -208,6 +243,17 @@
   </div>
   <div class="services-row" id="services-row"></div>
 
+  <!-- Account / plan — click to manage in Settings -->
+  <div class="account-bar" id="account-bar" title="Account & plan">
+    <span class="account-icon" id="account-icon">👤</span>
+    <span class="account-main">
+      <span class="account-email" id="account-email">Not signed in</span>
+      <span class="account-sub" id="account-sub">Sign in at portal.aitherium.com</span>
+    </span>
+    <span class="tier-badge free" id="tier-badge">FREE</span>
+  </div>
+  <div class="feats-row" id="feats-row" style="display:none"></div>
+
   <!-- Dashboard / Veil -->
   <div class="btn-section">
     <div class="btn-section-label">Dashboard</div>
@@ -238,6 +284,60 @@
         <span class="label">Side Panel<span class="sub">Chat · IRC · Search</span></span>
       </button>
     </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Session Capture (HAR) -->
+  <div class="btn-section">
+    <div class="btn-section-label">Session Capture</div>
+    <div id="har-idle">
+      <button class="eco-btn" id="btn-har-start" style="width:100%">
+        <span class="icon">🎬</span>
+        <span class="label">Capture Session<span class="sub">Record this tab's API calls → send to Aitherium</span></span>
+      </button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#9aa;margin-top:6px;cursor:pointer">
+        <input type="checkbox" id="har-redact" checked />
+        Redact secrets (auth tokens, cookies) — recommended
+      </label>
+    </div>
+    <div id="har-recording" style="display:none">
+      <div style="font-size:12px;color:#f59e0b;margin-bottom:6px">
+        ● Recording <span id="har-count">0</span> calls on this tab. Perform the actions you want us to see, then stop.
+      </div>
+      <button class="eco-btn" id="btn-har-stop" style="width:100%">
+        <span class="icon">⏹️</span>
+        <span class="label">Stop Capture<span class="sub">Review &amp; choose where it goes</span></span>
+      </button>
+    </div>
+    <div id="har-done" style="display:none">
+      <div style="font-size:12px;color:#10b981;margin-bottom:6px">
+        Captured <span id="har-done-count">0</span> calls<span id="har-trunc" style="color:#f59e0b"></span>. Where should it go?
+      </div>
+      <div class="btn-grid">
+        <button class="eco-btn" id="btn-har-send-aitherium">
+          <span class="icon">🔒</span>
+          <span class="label">Send to Aitherium<span class="sub">Encrypted, for building your automations</span></span>
+        </button>
+        <button class="eco-btn" id="btn-har-send-workspace">
+          <span class="icon">📁</span>
+          <span class="label">My Workspace<span class="sub">Save to your own encrypted vault</span></span>
+        </button>
+      </div>
+      <button class="eco-btn" id="btn-har-discard" style="width:100%;margin-top:6px">
+        <span class="icon">🗑️</span>
+        <span class="label">Discard<span class="sub">Delete this capture</span></span>
+      </button>
+    </div>
+  </div>
+
+  <div class="btn-section">
+    <div class="btn-section-label">X (Twitter) Autonomous Posting</div>
+    <button class="eco-btn accent" id="btn-x-sync" style="width:100%">
+      <span class="icon">𝕏</span>
+      <span class="label">Sync X session<span class="sub">Let Aither post as your logged-in @account</span></span>
+    </button>
+    <div id="x-sync-status" style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.4"></div>
   </div>
 
   <div class="divider"></div>
@@ -308,6 +408,9 @@
   </div>
 
   <script src="../shared/themes.js"></script>
+  <script src="../shared/vendor/nacl.min.js"></script>
+  <script src="../shared/license-verify.js"></script>
+  <script src="../shared/gating.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

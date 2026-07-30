@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vision — Roboflow</title>
+<style>
+  :root { color-scheme: dark;
+    --bg:#0f1216; --panel:#171b21; --ink:#e8eaed; --muted:#9aa4b2; --line:#262c34;
+    --accent:#3b82f6; --ok:#22c55e; --err:#f87171; }
+  @media (prefers-color-scheme: light) { :root {
+    --bg:#f6f7f9; --panel:#fff; --ink:#1b2027; --muted:#6b7280; --line:#e3e6ea;
+    --accent:#2563eb; --ok:#16a34a; --err:#dc2626; } }
+  * { box-sizing:border-box }
+  body { margin:0; padding:14px; background:var(--bg); color:var(--ink);
+    font:13.5px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:12px; margin-bottom:10px }
+  h2 { margin:0 0 4px; font-size:16px } h3 { margin:0 0 8px; font-size:13.5px }
+  .muted { color:var(--muted) }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center }
+  input { flex:1; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+    border-radius:7px; padding:7px 9px; font:inherit; min-width:110px; font-size:12.5px }
+  button { background:var(--accent); color:#fff; border:none; border-radius:7px;
+    padding:7px 12px; font:inherit; cursor:pointer; font-size:12.5px }
+  button.ghost { background:var(--line); color:var(--ink) }
+  button:disabled { opacity:.55; cursor:default }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px;
+    white-space:pre-wrap; word-break:break-word; margin:8px 0 0; max-height:45vh; overflow:auto;
+    font-size:11.5px }
+  details summary { cursor:pointer; font-size:13px }
+</style>
+</head>
+<body>
+<h2>Vision — Roboflow inference</h2>
+<p class="muted" style="margin-top:0">Local inference server health + workflow test-bench.
+  The full asset pipeline (quality gate, batch, 3D, dashboard) lives in your agent's
+  admin console → Vision tab.</p>
+
+<div class="card">
+  <div class="row"><h3 style="flex:1">Server</h3>
+    <button class="ghost" id="vision-refresh">Refresh</button></div>
+  <div id="vision-status" class="muted">Checking…</div>
+  <details style="margin-top:10px">
+    <summary>Settings</summary>
+    <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px">
+      <input id="vision-server" placeholder="Inference server URL (http://localhost:9001)">
+      <input id="vision-workspace" placeholder="Workspace slug">
+      <input id="vision-workflow" placeholder="Workflow id (asset-pipeline)">
+      <button class="ghost" id="vision-save" style="align-self:flex-start">Save</button>
+    </div>
+  </details>
+</div>
+
+<div class="card">
+  <h3>Test a workflow</h3>
+  <div class="row">
+    <input id="vision-image-url" placeholder="Image URL (https://…) — fetched BY the server">
+    <button id="vision-run">Run</button>
+  </div>
+  <pre id="vision-result" style="display:none"></pre>
+</div>
+
+<script src="vision.js"></script>
+</body>
+</html>

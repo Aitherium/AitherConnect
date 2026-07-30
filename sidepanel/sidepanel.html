@@ -123,6 +123,15 @@
     .setup-dot.up { background: var(--success); box-shadow: 0 0 6px rgba(16,185,129,0.4); }
     .setup-dot.down { background: var(--error); box-shadow: 0 0 6px rgba(239,68,68,0.3); }
     .setup-dot.checking { background: var(--warning); animation: thinkPulse 1s ease-in-out infinite; }
+    /* Not routed in this tier — inert, never red. A hollow dot reads as
+       "nothing was asked of this" instead of "this failed". */
+    .setup-dot.na { background: transparent; box-shadow: none; border: 1px solid var(--border-bright); }
+    /* Answered, but slowly — amber, because this is a latency problem to chase,
+       not a dead service to restart. */
+    .setup-dot.slow { background: var(--warning); box-shadow: 0 0 6px rgba(245,158,11,0.35); }
+    /* We stopped waiting. That is not the same as "it is down", and rendering it
+       red is how a healthy-but-slow fleet came to look entirely broken. */
+    .setup-dot.timeout { background: transparent; box-shadow: none; border: 2px solid var(--warning); }
     .setup-name { flex: 1; color: var(--text-primary); }
     .setup-detail { color: var(--text-muted); font-size: 10px; }
     .setup-btn {
@@ -163,6 +172,10 @@
       cursor: default;
     }
     .topbar-context.active { color: var(--accent); border-color: rgba(34,211,238,0.25); }
+    .topbar-context.tier-genesis { color: var(--success); border-color: rgba(16,185,129,0.3); }
+    .topbar-context.tier-node { color: var(--warning); border-color: rgba(245,158,11,0.3); }
+    .topbar-context.tier-cloud { color: var(--accent); border-color: rgba(34,211,238,0.3); }
+    .topbar-context.tier-offline { color: var(--text-muted); border-color: var(--border); }
     .topbar-spacer { flex: 1; }
 
     .topbar-btn {
@@ -183,15 +196,34 @@
 
     /* ── Tabs ────────────────────────────────────────────────────── */
 
+    /* Twelve tabs in a side panel do not fit. Without a scroll axis flex just
+       squeezes every item below its text width, so the trailing tabs (Setup,
+       Events) clipped to nothing and the only way to reach them was to drag the
+       panel wider. Scroll horizontally instead, and never let a tab shrink. */
     .nav-tabs {
       display: flex;
       background: rgba(5, 5, 10, 0.4);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
       padding: 0 8px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-bright) transparent;
+      scroll-behavior: smooth;
+      /* Fade the right edge so a cut-off tab reads as "there is more". */
+      -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent 100%);
+              mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent 100%);
     }
+    .nav-tabs::-webkit-scrollbar { height: 3px; }
+    .nav-tabs::-webkit-scrollbar-track { background: transparent; }
+    .nav-tabs::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+    /* No overflow, no mask — otherwise the last tab is dimmed for no reason. */
+    .nav-tabs:not(:hover)::-webkit-scrollbar-thumb { background: var(--border); }
 
     .nav-tab {
+      flex: 0 0 auto;
+      white-space: nowrap;
       padding: 10px 14px;
       font-size: 11px;
       font-weight: 500;
@@ -298,6 +330,11 @@
     .trace-tag.progress { color: #60a5fa; }
     .trace-tag.steer { color: #c084fc; }
     .trace-tag.done { color: #10b981; }
+    /* Turn/facet play-by-play — the runtime always emitted these, the panel
+       just never rendered them, so a long healthy turn looked hung. */
+    .trace-tag.turn { color: #38bdf8; }
+    .trace-tag.facet { color: #a3e635; }
+    .trace-tag.warn { color: #fbbf24; }
     .trace-spinner {
       display: inline-block;
       width: 10px;
@@ -839,11 +876,74 @@
       position: relative;
     }
 
+    /* Single image: as large as the panel allows, aspect preserved (never squished). */
     .img-job-body img {
       width: 100%;
+      height: auto;
+      max-height: 70vh;
+      object-fit: contain;
       display: block;
+      background: #0a0a0a;
+      cursor: zoom-in;
       transition: opacity 0.3s ease;
     }
+
+    /* Multiple images: a real thumbnail grid instead of squished stacking. */
+    .img-job-body.multi {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 6px;
+      padding: 6px;
+    }
+    .img-job-body.multi img {
+      aspect-ratio: 1 / 1;
+      max-height: none;
+      object-fit: cover;
+      border-radius: var(--radius-sm);
+    }
+
+    /* Full-size lightbox overlay */
+    .img-lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: rgba(0,0,0,0.92);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 12px;
+      gap: 12px;
+    }
+    .img-lightbox img {
+      max-width: 100%;
+      max-height: calc(100vh - 80px);
+      object-fit: contain;
+      border-radius: var(--radius);
+      box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    }
+    .img-lightbox-bar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .img-lightbox-bar .lb-btn {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid var(--border-bright, var(--border));
+      color: var(--text-primary);
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex; align-items: center; gap: 6px;
+      transition: all var(--transition);
+    }
+    .img-lightbox-bar .lb-btn.primary { background: var(--accent); color: #000; border-color: var(--accent); }
+    .img-lightbox-bar .lb-btn:hover { border-color: var(--accent); }
+    .img-lightbox-bar .lb-meta { color: var(--text-muted); font-size: 11px; font-family: var(--font-mono); margin-right: 8px; }
 
     .img-job-body .job-progress {
       height: 2px;
@@ -895,7 +995,14 @@
     }
     .img-action-btn:hover { border-color: var(--accent); color: var(--accent); }
     .img-action-btn.delete:hover { border-color: var(--error); color: var(--error); }
-    .img-action-btn.download:hover { border-color: var(--success); color: var(--success); }
+    /* Make Save discoverable — filled success button, not a faint chip. */
+    .img-action-btn.download {
+      background: var(--success, #10b981);
+      color: #04140d;
+      border-color: var(--success, #10b981);
+      font-weight: 700;
+    }
+    .img-action-btn.download:hover { filter: brightness(1.1); color: #04140d; }
 
     /* ── Themis Consumer Shield Cards ────────────────────────────── */
 
@@ -1676,6 +1783,113 @@
       transition: all var(--transition);
     }
     .theme-panel-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+    /* ── Capability Gating ──────────────────────────────────────────── */
+
+    .cap-hidden { display: none !important; opacity: 0; pointer-events: none; }
+
+    /* ── Knowledge Base Panel ────────────────────────────────────────── */
+
+    .kb-search-area {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+
+    .kb-search-area input {
+      flex: 1;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 8px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+    }
+    .kb-search-area input:focus { outline: none; border-color: var(--accent); }
+
+    .kb-search-area button {
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 8px 16px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 12px;
+      transition: all var(--transition);
+    }
+    .kb-search-area button:hover { border-color: var(--accent); color: var(--accent); }
+    .kb-search-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .kb-stats {
+      padding: 6px 12px;
+      font-size: 10px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .kb-results {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 12px 12px;
+    }
+
+    .kb-snippet-card {
+      padding: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      border-radius: var(--radius);
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+    .kb-snippet-card:hover {
+      background: rgba(255,255,255,0.05);
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    .kb-snippet-title { font-weight: 600; font-size: 12px; margin-bottom: 4px; color: var(--text-primary); }
+    .kb-snippet-text { color: var(--text-secondary); font-size: 11px; margin-bottom: 6px; line-height: 1.4; }
+    .kb-snippet-meta { display: flex; gap: 8px; font-size: 9px; color: var(--text-muted); }
+    .kb-snippet-source { background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); color: var(--accent); }
+    .kb-snippet-score { background: rgba(34,211,238,0.1); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); }
+
+    .kb-controls {
+      display: flex;
+      gap: 6px;
+      padding: 12px;
+      border-top: 1px solid var(--border);
+      background: rgba(0,0,0,0.2);
+      flex-wrap: wrap;
+    }
+    .kb-controls button {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 10px;
+      cursor: pointer;
+      font-family: var(--font-mono);
+      transition: all var(--transition);
+    }
+    .kb-controls button:hover { border-color: var(--accent); color: var(--accent); }
+    .kb-controls label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      color: var(--text-secondary);
+      margin-left: auto;
+    }
+    .kb-controls input[type="checkbox"] { cursor: pointer; }
   </style>
 </head>
 <body>
@@ -1683,10 +1897,12 @@
   <div class="topbar">
     <span class="topbar-logo">AitherConnect</span>
     <div class="topbar-status" id="status-dot" title="Disconnected"></div>
+    <span class="topbar-context" id="tier-badge" title="Detecting tier..." style="cursor:pointer;">detecting...</span>
     <span class="topbar-context" id="workspace-badge" title="No workspace configured"></span>
     <div class="topbar-spacer"></div>
     <button class="topbar-btn" id="btn-veil" title="Open AitherVeil Dashboard">🖥️ Veil</button>
     <button class="topbar-btn" id="btn-desktop" title="Launch AitherDesktop">🪟</button>
+    <button class="topbar-btn" id="btn-crawl-site" title="Crawl this site into the knowledge base (server-side, no tabs opened)">🕷️ Crawl</button>
     <button class="topbar-btn" id="btn-dashboard">Dashboard</button>
     <button class="topbar-btn" id="btn-theme" title="Change theme">🎨</button>
     <button class="topbar-btn" id="btn-settings" title="Open settings">⚙</button>
@@ -1695,12 +1911,14 @@
   <!-- Tabs -->
   <div class="nav-tabs" id="nav-tabs">
     <div class="nav-tab active" data-panel="chat">💬 Chat</div>
+    <div class="nav-tab" data-panel="shell">🐚 Shell</div>
     <div class="nav-tab" data-panel="irc">📡 IRC</div>
     <div class="nav-tab" data-panel="images">🎨 Images</div>
     <div class="nav-tab" data-panel="search">🔍 Search</div>
     <div class="nav-tab" data-panel="notes">📝 Notes</div>
     <div class="nav-tab" data-panel="apps">🧩 Apps</div>
     <div class="nav-tab" data-panel="knowledge">🧠 KB</div>
+    <div class="nav-tab" data-panel="tools">🔧 Tools</div>
     <div class="nav-tab" data-panel="content">📑 Content</div>
     <div class="nav-tab" data-panel="setup">🔌 Setup</div>
     <div class="nav-tab" data-panel="events">📡 Events</div>
@@ -1728,6 +1946,14 @@
       <span id="themis-scan-status" style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); margin-left: auto;"></span>
     </div>
     <div id="chat-image-preview" style="display:none; gap:6px; padding:4px 8px; overflow-x:auto; flex-wrap:nowrap;"></div>
+    <!-- Session continuity panel (shown only for cloud/genesis tiers) -->
+    <div id="chat-session-panel" style="display:none; padding:8px 12px; border-top:1px solid var(--border); background:rgba(0,0,0,0.15); font-size:10px; color:var(--text-muted); font-family:var(--font-mono);">
+      <div style="display:flex; align-items:center; gap:8px; justify-content:space-between; margin-bottom:4px;">
+        <span>Session: <span id="chat-session-id" style="color:var(--accent); font-weight:600;">—</span></span>
+        <button id="chat-session-copy" title="Copy command" style="background:rgba(255,255,255,0.04); border:1px solid var(--border); border-radius:4px; color:var(--text-secondary); padding:2px 6px; cursor:pointer; font-size:9px; transition:var(--transition);">⧉ Copy</button>
+      </div>
+      <div id="chat-session-command" style="display:none; background:rgba(0,0,0,0.3); border:1px solid var(--border-bright); border-radius:4px; padding:4px 6px; word-break:break-all; margin-top:2px; color:var(--accent);">aither resume <span id="chat-session-id-cmd"></span></div>
+    </div>
     <div class="chat-input-area">
       <button id="chat-attach" title="Attach image" style="background:var(--bg-tertiary); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text-muted); padding:6px 8px; cursor:pointer; font-size:14px; transition:var(--transition);">📎</button>
       <input id="chat-file-input" type="file" accept="image/*" multiple style="display:none;" />
@@ -1740,12 +1966,39 @@
     </div>
   </div>
 
+  <!-- Shell Panel — AitherShell in the browser, plugged into page context -->
+  <div class="panel" id="panel-shell">
+    <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-bottom:1px solid var(--border); font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">
+      <span id="shell-session">session: —</span>
+      <span id="shell-dot" title="session heartbeat" style="width:8px; height:8px; border-radius:50%; background:var(--border); display:inline-block;"></span>
+      <label style="margin-left:auto; display:flex; align-items:center; gap:4px; cursor:pointer;" title="Send the current page (url, title, selection) as context">
+        <input type="checkbox" id="shell-ctx" checked /> page context
+      </label>
+    </div>
+    <div class="chat-messages" id="shell-log">
+      <div class="chat-msg system">AitherShell — type a message or a /command. The current page is sent as context.</div>
+    </div>
+    <div class="chat-input-area">
+      <button id="shell-steer" title="Steer the running turn (append a follow-up)" style="background:var(--bg-tertiary); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text-muted); padding:6px 8px; cursor:pointer; font-size:13px;">↪</button>
+      <button id="shell-cancel" title="Abort the running turn" style="background:var(--bg-tertiary); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text-muted); padding:6px 8px; cursor:pointer; font-size:13px;">⏹</button>
+      <textarea id="shell-input" rows="1" placeholder="aither ›"></textarea>
+      <button id="shell-send">Send</button>
+    </div>
+  </div>
+
   <!-- IRC Panel -->
   <div class="panel" id="panel-irc">
     <!-- Nick entry (shown when not connected) -->
     <div class="irc-nick-entry" id="irc-nick-entry">
       <h3>📡 AitherRelay</h3>
       <p>IRC-style chat — humans + agents</p>
+      <!-- Workspace Selector -->
+      <div style="margin-bottom: 12px;">
+        <label style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 4px;">Workspace</label>
+        <select id="irc-workspace-select" style="width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-primary); padding: 6px 8px; border-radius: var(--radius-sm); font-size: 11px; cursor: pointer;">
+          <option value="">Loading workspaces...</option>
+        </select>
+      </div>
       <input type="text" id="irc-nick-input" placeholder="Pick a nick" maxlength="20" />
       <button id="irc-connect-btn" disabled>Connect</button>
       <div style="display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; margin-top: 4px;">
@@ -1773,6 +2026,11 @@
         <div class="irc-header">
           <span class="irc-ch-name" id="irc-ch-name">#general</span>
           <span class="irc-ch-topic" id="irc-ch-topic"></span>
+          <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+            <select id="irc-workspace-select-header" style="background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text-secondary); padding: 4px 6px; border-radius: var(--radius-sm); font-size: 10px; cursor: pointer; max-width: 120px;" title="Switch workspace">
+              <option value="">Workspaces</option>
+            </select>
+          </div>
         </div>
         <div class="irc-messages" id="irc-messages"></div>
         <div class="irc-input-area">
@@ -1815,6 +2073,13 @@
             <option value="realistic">Realistic</option>
             <option value="illustration">Illustration</option>
             <option value="fantasy">Fantasy</option>
+          </select>
+        </label>
+        <label>Backend
+          <select id="img-backend" title="Sana = fast (Linear DiT); ComfyUI/SD = heavy, more control. Auto prefers Sana, falls back to ComfyUI. The fleet handles the GPU/VRAM swap automatically.">
+            <option value="auto" selected>⚙ Auto</option>
+            <option value="sana">⚡ Sana</option>
+            <option value="comfyui">🎨 ComfyUI/SD</option>
           </select>
         </label>
       </div>
@@ -1863,6 +2128,12 @@
 
   <!-- Apps Panel -->
   <div class="panel" id="panel-apps">
+    <div class="apps-tabs" id="apps-tabs" style="display:flex; gap:6px; padding:8px 8px 0;">
+      <button class="apps-subtab active" data-apps-view="installed"
+              style="flex:1; padding:6px; border:1px solid var(--border); background:var(--accent); color:#fff; border-radius:6px; font-size:12px; cursor:pointer;">Installed</button>
+      <button class="apps-subtab" data-apps-view="marketplace"
+              style="flex:1; padding:6px; border:1px solid var(--border); background:transparent; color:var(--text-muted); border-radius:6px; font-size:12px; cursor:pointer;">🛍️ Marketplace</button>
+    </div>
     <div class="apps-header" id="apps-header">
       <input type="text" id="apps-search" placeholder="Search apps..." />
       <select id="apps-category">
@@ -1876,59 +2147,78 @@
         <option value="infra">Infra</option>
         <option value="utility">Utility</option>
       </select>
+      <label id="apps-experimental-label" title="Show apps still in beta / not fully working"
+             style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--text-muted); white-space:nowrap; cursor:pointer;">
+        <input type="checkbox" id="apps-experimental" style="margin:0;" />
+        Experimental
+      </label>
     </div>
     <div class="apps-grid" id="apps-grid"></div>
+    <!-- Marketplace sub-view: unified catalog (agent/skill/tool packs, apps,
+         extensions) from AitherMarketplace with the server-side entitlement gate. -->
+    <div id="marketplace-view" style="display:none; padding:0 8px 8px;">
+      <div class="apps-header" id="marketplace-header" style="padding-top:8px;">
+        <input type="text" id="marketplace-search" placeholder="Search marketplace..." />
+        <select id="marketplace-kind">
+          <option value="">All kinds</option>
+          <option value="agent_pack">Agent packs</option>
+          <option value="skill_pack">Skill packs</option>
+          <option value="tool_pack">Tool packs</option>
+          <option value="application">Applications</option>
+          <option value="extension">Extensions</option>
+          <option value="plugin">Plugins</option>
+          <option value="tool">Tools</option>
+        </select>
+        <button class="np-btn" id="marketplace-refresh" title="Refresh catalog">↻</button>
+      </div>
+      <div id="marketplace-status" style="font-size:11px; color:var(--text-muted); padding:6px 2px;"></div>
+      <div class="apps-grid" id="marketplace-grid"></div>
+    </div>
     <div class="app-embed-container" id="app-embed-container" style="display: none;">
       <div class="app-embed-header">
         <button class="np-btn" id="app-back" title="Back to app list">← Back</button>
         <span class="app-embed-title" id="app-embed-title"></span>
+        <button class="np-btn" id="app-connect-capture" title="Set up automatic capture on the EHR site" style="display:none;">🔌 Enable capture</button>
+        <button class="np-btn" id="app-discover-fields" title="Discovery mode: read the EHR's fields and API to build a capture pack" style="display:none;">🔎 Discover fields</button>
+        <button class="np-btn" id="app-connect-api" title="API capture: stream the EHR's own API responses to the engine" style="display:none;">🔌 Connect API</button>
         <button class="np-btn" id="app-popout" title="Open in new tab">↗ Pop out</button>
       </div>
-      <iframe id="app-embed-frame" class="app-embed-frame" sandbox="allow-same-origin allow-scripts allow-forms allow-popups"></iframe>
+      <iframe id="app-embed-frame" class="app-embed-frame" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"></iframe>
     </div>
   </div>
 
   <!-- Knowledge Base Panel -->
   <div class="panel" id="panel-knowledge">
-    <div style="padding: 12px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-        <div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">Knowledge Bases</div>
-        <div style="display: flex; gap: 6px;">
-          <button id="kb-create-btn" style="padding: 4px 10px; border-radius: 6px; border: none; background: var(--accent); color: #fff; cursor: pointer; font-size: 10px; font-weight: 600;">+ Create</button>
-          <button id="kb-refresh-btn" style="padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary); cursor: pointer; font-size: 10px;">Refresh</button>
-        </div>
-      </div>
-      <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 12px;">Manage knowledge bases for agent-accessible RAG</div>
+    <div class="kb-search-area">
+      <input type="text" id="kb-search-input" placeholder="Search knowledge base..." />
+      <button id="kb-search-btn">Search</button>
+    </div>
+    <div class="kb-stats" id="kb-stats">
+      <span id="kb-stats-text">Loading stats...</span>
+    </div>
+    <div class="kb-results" id="kb-results"></div>
+    <div class="kb-controls">
+      <button id="kb-save-page-btn" title="Save current page to KB">📥 Save Page</button>
+      <button id="kb-open-manager-btn" title="Open full KB Manager">🔧 Manager</button>
+      <label title="Use RAG grounding for chat responses">
+        <input type="checkbox" id="kb-rag-toggle" checked />
+        RAG Enabled
+      </label>
+    </div>
+  </div>
 
-      <!-- Create KB inline form (hidden by default) -->
-      <div id="kb-create-form" style="display: none; margin-bottom: 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 10px;">
-        <input type="text" id="kb-create-name" placeholder="Knowledge base name" style="width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: 12px; margin-bottom: 6px;" />
-        <input type="text" id="kb-create-desc" placeholder="Description (optional)" style="width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: 12px; margin-bottom: 6px;" />
-        <div style="display: flex; gap: 6px;">
-          <button id="kb-create-submit" style="padding: 4px 10px; border-radius: 6px; border: none; background: var(--accent); color: #fff; cursor: pointer; font-size: 10px; font-weight: 600;">Create</button>
-          <button id="kb-create-cancel" style="padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary); cursor: pointer; font-size: 10px;">Cancel</button>
-        </div>
+  <!-- Tools Panel (MCP) -->
+  <div class="panel" id="panel-tools">
+    <div style="padding:12px; display:flex; flex-direction:column; gap:10px; height:100%;">
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="text" id="tools-search" placeholder="Search tools..."
+          style="flex:1; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text-primary); font-size:12px; font-family:var(--font-mono);" />
+        <button class="input-btn" id="tools-refresh" style="padding:4px 8px; font-size:11px;">Refresh</button>
       </div>
-
-      <!-- KB list -->
-      <div id="kb-plugins-list" style="margin-bottom: 12px;">
-        <div style="font-size: 11px; color: var(--text-muted);">Loading...</div>
-      </div>
-
-      <!-- Query section -->
-      <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px;">
-        <div style="font-weight: 600; font-size: 12px; margin-bottom: 6px; color: var(--text-primary);">Query Knowledge</div>
-        <div style="display: flex; gap: 6px; margin-bottom: 6px;">
-          <select id="kb-query-select" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: 11px;">
-            <option value="">All knowledge bases</option>
-          </select>
-        </div>
-        <div style="display: flex; gap: 6px;">
-          <input type="text" id="kb-query-input" placeholder="Ask a question..." style="flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: 12px;" />
-          <button id="kb-query-submit" style="padding: 6px 12px; border-radius: 6px; border: none; background: var(--accent); color: #fff; cursor: pointer; font-size: 11px; font-weight: 600;">Search</button>
-        </div>
-        <div id="kb-query-results" style="margin-top: 8px;"></div>
-      </div>
+      <div id="tools-tier-info" style="font-size:11px; color:var(--text-muted); font-family:var(--font-mono);"></div>
+      <div id="tools-list" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px;"></div>
+      <!-- Tool execution result -->
+      <div id="tools-result" style="display:none; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px; font-family:var(--font-mono); font-size:11px; max-height:200px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;"></div>
     </div>
   </div>
 
@@ -2020,6 +2310,9 @@
   </div>
 
   <script src="../shared/themes.js"></script>
+  <script src="../shared/health-debounce.js"></script>
+  <script src="../shared/trace-events.js"></script>
   <script src="sidepanel.js?v=20260429c"></script>
+  <script src="shell-tab.js?v=20260601a"></script>
 </body>
 </html>

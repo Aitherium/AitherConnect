@@ -1,15 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "AitherConnect",
-  "version": "2.4.0",
-  "description": "Federated AI Search & AitherOS Desktop Bridge. Connects your browser to AitherOS for intelligent search, chat, and knowledge management.",
+  "name": "AitherConnect — AI Chat & Knowledge Assistant",
+  "version": "3.6.4",
+  "description": "AI browsing assistant with a local knowledge base. Bring your own API key (Anthropic, OpenAI, OpenRouter, Gemini, Ollama) — chat, save and search what you read.",
+  "minimum_chrome_version": "124",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "permissions": [
     "sidePanel",
     "storage",
+    "unlimitedStorage",
     "activeTab",
     "tabs",
     "scripting",
     "cookies",
+    "downloads",
     "omnibox",
     "contextMenus",
     "notifications",
@@ -21,16 +27,58 @@
     "https://127.0.0.1/*",
     "http://localhost/*",
     "https://localhost/*",
-    "https://*.aitherium.com/*"
+    "https://*.aitherium.com/*",
+    "https://www.regulations.gov/*"
   ],
   "optional_host_permissions": [
+    "https://api.anthropic.com/*",
+    "https://api.openai.com/*",
+    "https://openrouter.ai/*",
+    "https://generativelanguage.googleapis.com/*",
     "https://*.slack.com/*",
     "https://*.atlassian.net/*",
     "https://github.com/*",
+    "https://huggingface.co/*",
+    "https://*.huggingface.co/*",
+    "https://*.hf.co/*",
     "*://*/*"
   ],
   "background": {
     "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [ "https://www.regulations.gov/*" ],
+      "js": [ "content/cta-engine.js" ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.aitherium.com/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [ "content/portal-bridge.js" ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["adapters/*.json"],
+      "matches": ["https://www.regulations.gov/*", "https://*.aitherium.com/*"]
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "aitherconnect@aitherium.com",
+      "strict_min_version": "121.0"
+    }
+  },
+  "externally_connectable": {
+    "matches": [
+      "https://portal.aitherium.com/*",
+      "https://*.aitherium.com/*"
+    ]
   },
   "action": {
     "default_title": "AitherConnect",
@@ -46,35 +94,6 @@
   "omnibox": {
     "keyword": "ai"
   },
-  "content_scripts": [
-    {
-      "matches": ["https://*.slack.com/*"],
-      "js": ["content/slack.js"]
-    },
-    {
-      "matches": ["https://*.atlassian.net/wiki/*", "https://*.atlassian.net/jira/*"],
-      "js": ["content/atlassian.js"]
-    },
-    {
-      "matches": ["https://github.com/*"],
-      "js": ["content/github.js"]
-    },
-    {
-      "matches": ["*://*/*"],
-      "js": ["content/harvester.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["*://*/*"],
-      "js": ["content/agent-extractor.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["*://*/*"],
-      "js": ["content/text-actions.js"],
-      "run_at": "document_idle"
-    }
-  ],
   "commands": {
     "analyze-selection": {
       "suggested_key": {

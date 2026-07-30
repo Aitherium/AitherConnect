@@ -1,0 +1,28 @@
+{
+  "id": "x.com",
+  "version": 1,
+  "name": "X (Twitter) — session sync + compose",
+  "match": ["https://x.com/*", "https://twitter.com/*"],
+  "waitFor": "div[data-testid='primaryColumn']",
+  "roles": {
+    "composer": [
+      "div[data-testid='tweetTextarea_0']",
+      "div[role='textbox'][contenteditable='true']"
+    ],
+    "post_button": [
+      "button[data-testid='tweetButton']",
+      "button[data-testid='tweetButtonInline']"
+    ],
+    "like_button": ["button[data-testid='like']"],
+    "reply_button": ["button[data-testid='reply']"],
+    "follower_count": ["a[href$='/verified_followers'] span", "a[href$='/followers'] span"],
+    "account_switcher": ["button[data-testid='SideNav_AccountSwitcher_Button']"]
+  },
+  "session": {
+    "kind": "cookie-sync",
+    "action": "x-session-sync",
+    "requires": ["auth_token", "ct0"],
+    "note": "Sync this browser's own logged-in X session to the fleet so Aither can post as the account. No password is read or sent."
+  },
+  "submit": "button[data-testid='tweetButton']"
+}

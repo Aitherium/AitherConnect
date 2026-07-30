@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>DemoEHR — Patient Chart</title>
+<style>
+  :root { --ink:#1a2433; --line:#cfd8e3; --accent:#2563eb; --bg:#f4f7fb; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", system-ui, sans-serif; margin:0; background:var(--bg); color:var(--ink); }
+  header { background:#102a54; color:#fff; padding:10px 20px; display:flex; justify-content:space-between; align-items:center; }
+  header .brand { font-weight:700; letter-spacing:.5px; }
+  header .demo-tag { font-size:12px; background:#eab308; color:#102a54; padding:2px 8px; border-radius:10px; font-weight:700; }
+  #patient-header { background:#fff; border-bottom:2px solid var(--line); padding:12px 20px; display:flex; gap:24px; align-items:baseline; }
+  #patient-name { font-size:20px; font-weight:700; }
+  #patient-id { font-family:Consolas,monospace; color:#475569; }
+  main { max-width:860px; margin:18px auto; padding:0 16px; display:grid; gap:16px; }
+  section { background:#fff; border:1px solid var(--line); border-radius:8px; padding:16px 20px; }
+  h2 { margin:0 0 12px; font-size:14px; text-transform:uppercase; letter-spacing:1px; color:#475569; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:10px; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:#475569; flex:1; min-width:180px; }
+  input, select, textarea { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:5px; }
+  textarea { min-height:70px; resize:vertical; }
+  .note { font-size:12px; color:#64748b; }
+  footer { text-align:center; color:#94a3b8; font-size:12px; padding:18px 0 30px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">DemoEHR</span>
+  <span class="demo-tag">SYNTHETIC DEMO — NO REAL DATA</span>
+</header>
+
+<!-- The patient-context anchor FormBridge keys every capture batch on -->
+<div id="patient-header">
+  <span id="patient-name">Pat Example</span>
+  <span id="patient-id">DEMO-0001</span>
+  <span class="note">DOS: today · Provider: Dr. Demo</span>
+</div>
+
+<main>
+  <section>
+    <h2>Demographics</h2>
+    <div class="row">
+      <label>Date of birth
+        <input type="text" name="dob" placeholder="1980-04-12" />
+      </label>
+      <label>Phone
+        <input type="text" name="phone" placeholder="(555) 010-1234" />
+      </label>
+      <label>Insurance carrier
+        <select name="carrier">
+          <option value="">— select —</option>
+          <option>BCBS</option>
+          <option>Aetna</option>
+          <option>Self-Pay</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>SSN (never captured — denylisted)
+        <input type="text" name="ssn" placeholder="###-##-####" />
+      </label>
+      <label>Portal password (never captured — type=password)
+        <input type="password" name="portal-pass" />
+      </label>
+    </div>
+  </section>
+
+  <section>
+    <h2>SOAP Note</h2>
+    <label>Subjective <textarea id="subjective" placeholder="Patient reports..."></textarea></label>
+    <label>Objective <textarea id="objective" placeholder="Exam findings..."></textarea></label>
+    <label>Assessment <textarea id="assessment" placeholder="Assessment..."></textarea></label>
+    <label>Plan <textarea id="plan" placeholder="Plan of care..."></textarea></label>
+  </section>
+</main>
+
+<footer>DemoEHR is a static mock for the AitherFormBridge demo — serve with:
+<code>python -m http.server 8910</code> from AitherConnect/demo/</footer>
+</body>
+</html>

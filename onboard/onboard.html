@@ -115,6 +115,17 @@
     font-size: 13px;
   }
   .field input:focus { outline: none; border-color: var(--accent); }
+  .field select {
+    width: 100%;
+    padding: 10px 12px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+  }
+  .field select:focus { outline: none; border-color: var(--accent); }
 
   .actions {
     display: flex;
@@ -180,6 +191,33 @@
     vertical-align: 1px;
   }
 
+  /* Choice cards (larger, primary-emphasized) */
+  .choice-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .choice-card {
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .choice-card:hover { border-color: var(--border-bright); background: var(--bg-hover); }
+  .choice-card.primary {
+    border-color: rgba(34,211,238,0.45);
+    background: var(--accent-dim);
+  }
+  .choice-card.primary:hover {
+    background: rgba(34,211,238,0.25);
+    box-shadow: 0 6px 20px rgba(34,211,238,0.12);
+  }
+  .choice-card .title { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+  .choice-card.primary .title { color: var(--accent); }
+  .choice-card .body { font-size: 13px; color: var(--text-secondary); line-height: 1.4; }
+
   /* Install panel */
   .install-row {
     display: flex;
@@ -232,21 +270,143 @@
 
   .scope-list { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
   .scope-list span { color: var(--text-primary); }
+
+  .info-block {
+    padding: 10px 12px;
+    background: rgba(34,211,238,0.08);
+    border: 1px solid rgba(34,211,238,0.2);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 14px;
+  }
 </style>
 </head>
 <body>
   <h1>Welcome to AitherConnect</h1>
-  <p class="subtitle">Three steps to wire your browser into the AitherOS platform.</p>
+  <p class="subtitle">Wire your browser into AitherOS in a few simple steps.</p>
 
-  <div class="steps">
-    <div class="step-pill active" id="pill-1">1 · Sign in</div>
-    <div class="step-pill" id="pill-2">2 · Pick a mode</div>
-    <div class="step-pill" id="pill-3">3 · Provision</div>
+  <div class="steps" id="steps-container">
+    <div class="step-pill active" id="pill-0">0 · Choose</div>
+    <div class="step-pill" id="pill-1">1 · Set up</div>
+    <div class="step-pill" id="pill-2">2 · Verify</div>
+    <div class="step-pill" id="pill-3">3 · Ready</div>
   </div>
 
-  <!-- STEP 1: portal sign-in -->
-  <div class="panel" id="panel-1">
-    <h2>Sign in to portal.aitherium.com</h2>
+  <!-- STEP 0: choice -->
+  <div class="panel" id="panel-0">
+    <h2>How do you want to get started?</h2>
+    <p class="desc">Choose the option that fits your setup best. You can change it later.</p>
+
+    <div class="choice-grid">
+      <div class="choice-card primary" id="choice-byok">
+        <div class="title">✨ Use an AI Provider (BYOK)</div>
+        <div class="body">
+          Bring your own API key — Anthropic, OpenAI, OpenRouter, Gemini, or local Ollama.
+          No account needed.
+        </div>
+      </div>
+      <div class="choice-card" id="choice-fleet">
+        <div class="title">🔌 Connect my AitherOS fleet</div>
+        <div class="body">
+          Local Genesis/Node detected automatically.
+        </div>
+      </div>
+      <div class="choice-card" id="choice-portal">
+        <div class="title">🏢 Sign in to Aitherium Portal</div>
+        <div class="body">
+          Cloud-based AitherOS with centralized identity and workspaces.
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn primary" id="choice-confirm" disabled>Continue</button>
+    </div>
+  </div>
+
+  <!-- STEP 1: BYOK provider setup -->
+  <div class="panel hidden" id="panel-byok-provider">
+    <h2>Choose a provider</h2>
+    <p class="desc">Select the AI service you want to use.</p>
+
+    <div id="byok-provider-list"></div>
+
+    <div class="actions">
+      <button class="btn" id="back-from-byok-provider">Back</button>
+      <button class="btn primary" id="continue-byok-key" disabled>Continue</button>
+    </div>
+  </div>
+
+  <!-- STEP 1b: BYOK API key entry -->
+  <div class="panel hidden" id="panel-byok-key">
+    <h2 id="byok-key-title">Enter your API key</h2>
+    <p class="desc" id="byok-key-desc"></p>
+
+    <div id="byok-origins-help" class="info-block hidden"></div>
+
+    <div class="field">
+      <label>API Key</label>
+      <input type="password" id="byok-api-key" placeholder="sk-..." autocomplete="off" />
+    </div>
+
+    <div class="field hidden" id="byok-baseurl-field">
+      <label>Base URL (optional)</label>
+      <input type="text" id="byok-base-url" placeholder="https://..." />
+    </div>
+
+    <div class="field">
+      <label>Model</label>
+      <select id="byok-model"></select>
+    </div>
+
+    <div id="byok-key-message"></div>
+
+    <div class="actions">
+      <button class="btn" id="back-from-byok-key">Back</button>
+      <button class="btn" id="byok-test-connection">Test connection</button>
+      <button class="btn primary" id="byok-save" disabled>Save &amp; continue</button>
+    </div>
+  </div>
+
+  <!-- STEP 3: BYOK finish -->
+  <div class="panel hidden" id="panel-byok-finish">
+    <h2>Ready to use AitherConnect</h2>
+    <p class="desc">Your provider is configured. Start using the extension in your browser.</p>
+
+    <div class="message success">Provider saved successfully</div>
+
+    <div class="actions">
+      <button class="btn" id="byok-open-kb">Open Knowledge Base</button>
+      <button class="btn primary" id="byok-open-sidepanel">Open side panel</button>
+    </div>
+  </div>
+
+  <!-- STEP 1: FLEET mode (existing local detection) -->
+  <div class="panel hidden" id="panel-1">
+    <h2>Configure your local AitherOS fleet</h2>
+    <p class="desc">AitherConnect will probe for Genesis and AitherNode running locally.</p>
+
+    <div class="install-row">
+      <div class="who">
+        AitherNode
+        <span class="hint">MCP server + ADK runtime (port 8090)</span>
+      </div>
+      <span class="status miss" id="status-node-fleet">checking…</span>
+    </div>
+
+    <div id="fleet-message"></div>
+
+    <div class="actions">
+      <button class="btn" id="back-from-fleet">Back</button>
+      <button class="btn" id="recheck-fleet" style="margin-right:auto;">Re-check local</button>
+      <button class="btn primary" id="finish-fleet">Finish setup</button>
+    </div>
+  </div>
+
+  <!-- STEP 1: PORTAL mode (portal sign-in) -->
+  <div class="panel hidden" id="panel-2">
+    <h2>Sign in to Aitherium Portal</h2>
     <p class="desc">
       Your portal account is the identity used to scope agents, workspaces, and
       federated fleet membership. Don't have one yet?
@@ -271,16 +431,16 @@
       <input type="text" id="login-2fa" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" />
     </div>
 
-    <div id="step1-message"></div>
+    <div id="portal-message"></div>
 
     <div class="actions">
-      <button class="btn" id="skip-portal">Skip — use local only</button>
+      <button class="btn" id="back-from-portal">Back</button>
       <button class="btn primary" id="do-login">Sign in</button>
     </div>
   </div>
 
-  <!-- STEP 2: mode -->
-  <div class="panel hidden" id="panel-2">
+  <!-- STEP 2: PORTAL mode selection -->
+  <div class="panel hidden" id="panel-3">
     <h2>Choose a deployment mode</h2>
     <p class="desc">You can change this later from the extension Settings page.</p>
 
@@ -309,15 +469,15 @@
     </div>
 
     <div class="actions">
-      <button class="btn" id="back-to-1">Back</button>
-      <button class="btn primary" id="continue-to-3" disabled>Continue</button>
+      <button class="btn" id="back-from-mode">Back</button>
+      <button class="btn primary" id="continue-to-provision" disabled>Continue</button>
     </div>
   </div>
 
-  <!-- STEP 3: provision -->
-  <div class="panel hidden" id="panel-3">
-    <h2 id="step3-title">Provision</h2>
-    <p class="desc" id="step3-desc"></p>
+  <!-- STEP 3: PORTAL provision -->
+  <div class="panel hidden" id="panel-4">
+    <h2 id="step4-title">Provision</h2>
+    <p class="desc" id="step4-desc"></p>
 
     <!-- Cloud / hybrid: portal agent registration -->
     <div id="provision-portal" class="hidden">
@@ -335,9 +495,10 @@
           AitherShell
           <span class="hint">Local CLI for managing the stack</span>
         </div>
-        <span class="status miss" id="status-shell">not detected</span>
+        <span class="status miss" id="status-shell">install via pip</span>
       </div>
-      <div class="code-block">pip install aithershell</div>
+      <!-- `pip install aithershell` was never published (PyPI 404) — npm is the real channel. -->
+      <div class="code-block">npm install -g @aitherium/shell-cli</div>
 
       <div class="install-row" id="row-node">
         <div class="who">
@@ -346,19 +507,22 @@
         </div>
         <span class="status miss" id="status-node">not detected</span>
       </div>
-      <div class="code-block">pip install aithernode &amp;&amp; aithernode start --port 8090</div>
+      <!-- `pip install aithernode` was never published (PyPI trusted publishing not
+           configured) — the portal's authenticated binary download is the real channel. -->
+      <div class="code-block">Download from https://portal.aitherium.com/download → run: aithernode start --port 8090</div>
 
       <button class="small-link" id="recheck-local" style="margin-top:6px;">Re-check local installation</button>
     </div>
 
-    <div id="step3-message"></div>
+    <div id="step4-message"></div>
 
     <div class="actions">
-      <button class="btn" id="back-to-2">Back</button>
+      <button class="btn" id="back-from-provision">Back</button>
       <button class="btn primary" id="finish">Finish setup</button>
     </div>
   </div>
 
+  <script src="../shared/providers.js"></script>
   <script src="../shared/portal-api.js"></script>
   <script src="onboard.js"></script>
 </body>

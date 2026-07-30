@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AitherConnect Knowledge Base</title>
+  <link rel="stylesheet" href="kb.css" />
+</head>
+<body>
+  <div class="kb-container">
+    <!-- Header -->
+    <div class="kb-header">
+      <h1>📚 Knowledge Base</h1>
+      <div class="kb-stats-bar">
+        <span id="stat-docs" class="stat-item">0 docs</span>
+        <span class="stat-sep">·</span>
+        <span id="stat-chunks" class="stat-item">0 chunks</span>
+        <span class="stat-sep">·</span>
+        <span id="stat-chars" class="stat-item">0 chars</span>
+        <span class="stat-sep">·</span>
+        <div class="storage-usage">
+          <span id="usage-bar" class="usage-bar"></span>
+          <span id="usage-pct" class="usage-pct">0%</span>
+        </div>
+      </div>
+      <div class="kb-header-right">
+        <div id="tier-badge" class="tier-badge"></div>
+        <input type="text" id="search-input" class="search-box" placeholder="Search...">
+      </div>
+    </div>
+
+    <!-- Main content area -->
+    <div class="kb-main">
+      <!-- Empty state -->
+      <div id="empty-state" class="empty-state">
+        <div class="empty-icon">📖</div>
+        <h2>Your Knowledge Base is Empty</h2>
+        <p>Get started by adding content to your KB. Here's how:</p>
+        <div class="empty-tips">
+          <div class="tip">
+            <strong>Right-click → Save Selection</strong><br>
+            <span>Highlight text and save it to your KB</span>
+          </div>
+          <div class="tip">
+            <strong>Side Panel → Save Page</strong><br>
+            <span>Capture the entire page from the panel</span>
+          </div>
+          <div class="tip">
+            <strong>Add Content Below</strong><br>
+            <span>Manually type or paste notes</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Search results view -->
+      <div id="search-results-view" class="view hidden">
+        <div class="search-controls">
+          <button id="back-to-docs-btn" class="back-btn">← Back to Documents</button>
+        </div>
+        <div id="search-results" class="search-results-list"></div>
+      </div>
+
+      <!-- Documents list view -->
+      <div id="docs-view" class="view">
+        <div class="docs-toolbar">
+          <div class="filter-controls">
+            <select id="source-filter" class="filter-select">
+              <option value="">All Sources</option>
+            </select>
+            <div id="tag-chips" class="tag-chips"></div>
+            <input type="text" id="text-filter" class="text-filter" placeholder="Filter docs...">
+          </div>
+          <div class="toolbar-actions">
+            <button id="add-text-btn" class="action-btn primary">+ Add Text/Note</button>
+            <button id="upload-file-btn" class="action-btn">📤 Upload File</button>
+            <button id="find-dupes-btn" class="action-btn">🔍 Find Duplicates</button>
+            <button id="export-btn" class="action-btn" data-gated="true">💾 Export All</button>
+            <button id="import-btn" class="action-btn" data-gated="true">📥 Import</button>
+          </div>
+        </div>
+        <div id="docs-list" class="docs-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modals -->
+
+  <!-- Add Text Modal -->
+  <div id="add-text-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Add Text/Note</h2>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label>Title</label>
+          <input type="text" id="add-title" placeholder="My note...">
+        </div>
+        <div class="field">
+          <label>Content</label>
+          <textarea id="add-content" placeholder="Paste or type your content here..." rows="10"></textarea>
+        </div>
+        <div class="field">
+          <label>Tags</label>
+          <input type="text" id="add-tags" placeholder="tag1, tag2, tag3">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="add-text-cancel" class="btn secondary">Cancel</button>
+        <button id="add-text-save" class="btn primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload File Modal -->
+  <div id="upload-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Upload Document</h2>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label>Select File (.txt or .md)</label>
+          <input type="file" id="file-input" accept=".txt,.md">
+          <div class="hint">Text and Markdown files only</div>
+        </div>
+        <div class="field">
+          <label>Document Title</label>
+          <input type="text" id="upload-title" placeholder="Auto-populated from filename">
+        </div>
+        <div class="field">
+          <label>Tags</label>
+          <input type="text" id="upload-tags" placeholder="tag1, tag2">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="upload-cancel" class="btn secondary">Cancel</button>
+        <button id="upload-save" class="btn primary">Upload</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete Confirm Modal -->
+  <div id="delete-confirm-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-small">
+      <div class="modal-header">
+        <h2>Delete Document?</h2>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="delete-confirm-text"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="delete-cancel" class="btn secondary">Cancel</button>
+        <button id="delete-confirm" class="btn danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Document Detail Drawer -->
+  <div id="detail-drawer" class="drawer hidden">
+    <div class="drawer-header">
+      <h2 id="detail-title"></h2>
+      <button class="drawer-close">&times;</button>
+    </div>
+    <div id="detail-meta" class="detail-meta"></div>
+    <div id="detail-chunks" class="detail-chunks"></div>
+  </div>
+
+  <!-- Duplicate Hints Panel -->
+  <div id="dedup-panel" class="panel hidden">
+    <div class="panel-header">
+      <h2>Near-Duplicate Detection</h2>
+      <button id="dedup-close" class="panel-close">&times;</button>
+    </div>
+    <div id="dedup-results" class="dedup-results"></div>
+  </div>
+
+  <!-- Upsell Modal (Pro features) -->
+  <div id="upsell-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-small">
+      <div class="modal-header">
+        <h2>✨ Pro Feature</h2>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="upsell-text"></p>
+        <p style="margin-top: 12px; font-size: 12px; color: var(--text-muted);">Upgrade to Pro to unlock all KB features.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="upsell-close" class="btn secondary">Close</button>
+        <button id="upsell-upgrade" class="btn primary">Upgrade</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Scripts (in order) -->
+  <script src="../shared/vendor/nacl.min.js"></script>
+  <script src="../shared/license-verify.js"></script>
+  <script src="../shared/gating.js"></script>
+  <script src="../shared/feature-hash-embed.js"></script>
+  <script src="../shared/chunker.js"></script>
+  <script src="../shared/providers.js"></script>
+  <script src="../shared/embeddings.js"></script>
+  <script src="../shared/kb-db.js"></script>
+  <script src="kb.js"></script>
+</body>
+</html>
