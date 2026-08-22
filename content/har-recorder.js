@@ -1,5 +1,5 @@
 /**
- * AitherConnect — HAR Session Recorder (MAIN world).
+ * Awconnect — HAR Session Recorder (MAIN world).
  *
  * Records the page's own fetch() + XMLHttpRequest traffic into HAR 1.2 entries
  * so a customer can capture a real working session of their web app and hand it
@@ -235,8 +235,8 @@
       "box-shadow:0 2px 10px rgba(0,0,0,.4)", "pointer-events:none",
     ].join(";");
     banner.textContent = REDACT
-      ? "● AitherConnect is recording API calls on this tab (secrets redacted)"
-      : "● AitherConnect is recording API calls on this tab (RAW — secrets included)";
+      ? "● Awconnect is recording API calls on this tab (secrets redacted)"
+      : "● Awconnect is recording API calls on this tab (RAW — secrets included)";
     const mount = () => { if (document.body) document.body.appendChild(banner); };
     if (document.body) mount(); else document.addEventListener("DOMContentLoaded", mount);
   } catch { /* no DOM yet */ }

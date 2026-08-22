@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AitherConnect Settings Sync Tests
+ * Awconnect Settings Sync Tests
  * ==================================
  * Validates field classification: device-local vs portal-synced.
  * Ensures no API keys leak into portal sync.
@@ -41,7 +41,7 @@ function fail(name, error) {
 
 // ─────────────────────────────────────────────────────────────────────────
 
-console.log('\n🔐 AitherConnect Settings Sync Classification\n');
+console.log('\n🔐 Awconnect Settings Sync Classification\n');
 
 // Read options.js and extract field classification
 const optionsContent = fs.readFileSync(optionsPath, 'utf-8');

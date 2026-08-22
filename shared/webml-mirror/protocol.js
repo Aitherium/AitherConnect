@@ -1,4 +1,4 @@
-// protocol.js — synced from @aitheros/portal-kit dist/webml — DO NOT DRIFT.
+// protocol.js — synced from awkit dist/webml — DO NOT DRIFT.
 // Regenerate with: node tools/sync-webml.mjs (see SYNC-NOTE.md).
 // Import extensions are rewritten for native browser ESM.
 // Message protocol between the UI (hook) and the WebGPU worker. Shared so every

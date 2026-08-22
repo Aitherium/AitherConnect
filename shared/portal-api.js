@@ -120,7 +120,7 @@ async function portalLogout() {
 async function portalQuickOnboard({ agent_name, description }) {
   const params = new URLSearchParams({
     agent_name,
-    description: description || "Browser-based AitherConnect agent",
+    description: description || "Browser-based Awconnect agent",
   });
   const r = await portalFetch(`/api/onboard/quick?${params.toString()}`, {
     method: "POST",

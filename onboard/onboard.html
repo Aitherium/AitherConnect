@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Get started with AitherConnect</title>
+<title>Get started with Awconnect</title>
 <style>
   :root {
     --bg-primary: #030305;
@@ -283,7 +283,7 @@
 </style>
 </head>
 <body>
-  <h1>Welcome to AitherConnect</h1>
+  <h1>Welcome to Awconnect</h1>
   <p class="subtitle">Wire your browser into AitherOS in a few simple steps.</p>
 
   <div class="steps" id="steps-container">
@@ -371,7 +371,7 @@
 
   <!-- STEP 3: BYOK finish -->
   <div class="panel hidden" id="panel-byok-finish">
-    <h2>Ready to use AitherConnect</h2>
+    <h2>Ready to use Awconnect</h2>
     <p class="desc">Your provider is configured. Start using the extension in your browser.</p>
 
     <div class="message success">Provider saved successfully</div>
@@ -385,11 +385,11 @@
   <!-- STEP 1: FLEET mode (existing local detection) -->
   <div class="panel hidden" id="panel-1">
     <h2>Configure your local AitherOS fleet</h2>
-    <p class="desc">AitherConnect will probe for Genesis and AitherNode running locally.</p>
+    <p class="desc">Awconnect will probe for Genesis and awnode running locally.</p>
 
     <div class="install-row">
       <div class="who">
-        AitherNode
+        awnode
         <span class="hint">MCP server + ADK runtime (port 8090)</span>
       </div>
       <span class="status miss" id="status-node-fleet">checking…</span>
@@ -455,7 +455,7 @@
       <div class="mode-card" data-mode="hybrid">
         <div class="title">🔌 Hybrid (local + portal) <span class="badge">recommended</span></div>
         <div class="body">
-          AitherShell and AitherNode run on your machine; portal coordinates
+          AitherShell and awnode run on your machine; portal coordinates
           identity, fleet, and shared knowledge. Best for power users.
         </div>
       </div>
@@ -502,14 +502,14 @@
 
       <div class="install-row" id="row-node">
         <div class="who">
-          AitherNode
+          awnode
           <span class="hint">MCP server + ADK runtime (port 8090)</span>
         </div>
         <span class="status miss" id="status-node">not detected</span>
       </div>
-      <!-- `pip install aithernode` was never published (PyPI trusted publishing not
+      <!-- `pip install awnode` was never published (PyPI trusted publishing not
            configured) — the portal's authenticated binary download is the real channel. -->
-      <div class="code-block">Download from https://portal.aitherium.com/download → run: aithernode start --port 8090</div>
+      <div class="code-block">Download from https://portal.aitherium.com/download → run: awnode start --port 8090</div>
 
       <button class="small-link" id="recheck-local" style="margin-top:6px;">Re-check local installation</button>
     </div>

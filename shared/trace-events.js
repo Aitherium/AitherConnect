@@ -1,5 +1,5 @@
 /**
- * AitherConnect run-trace event formatting
+ * Awconnect run-trace event formatting
  * =======================================
  * Turns a Genesis SSE event into the {tagClass, tag, msg} triple the chat
  * trace log renders.

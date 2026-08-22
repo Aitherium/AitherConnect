@@ -1,5 +1,5 @@
 // Atlassian (Jira/Confluence) Harvester
-console.log("[AitherConnect] Atlassian module loaded");
+console.log("[Awconnect] Atlassian module loaded");
 
 function scrapeAtlassian() {
     let source = "atlassian_generic";

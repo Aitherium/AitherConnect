@@ -1,5 +1,5 @@
 /**
- * AitherConnect Background Service Worker
+ * Awconnect Background Service Worker
  * ========================================
  *
  * Rewritten to match AitherExtension (AitherAeon) patterns:
@@ -15,7 +15,7 @@
 
 // Import shared tier detection utility and portal API
 importScripts("shared/tier-detect.js", "shared/portal-api.js", "shared/health-debounce.js",
-  "shared/aitherbrowser.js");
+  "shared/aitherbrowser.js", "shared/social-plan.js", "shared/harness-auth.js");
 
 // BYOK provider mode + local knowledge base (standalone, no fleet required).
 // Order matters: providers/feature-hash have no deps; embeddings needs both;
@@ -45,11 +45,12 @@ const DEFAULT_SETTINGS = {
   veilPort: 3000,                        // Veil (HTTP) — the bridge proxy entry point
   pulsePort: 8081,
   mindPort: 8088,
-  nodePort: 8090,                        // AitherNode ADK standalone port
+  nodePort: 8090,                        // awnode ADK standalone port
   nexusPort: 8122,
   searchPort: 8114,
   strataPort: 8136,
   themisPort: 8791,
+  bonsaiPort: 8798,                      // Bonsai Image service (FLUX.2 Klein ternary 4B)
   newswirePort: 8208,
   relayPort: 8205,
   relayUrl: "",
@@ -81,6 +82,58 @@ const DEFAULT_SETTINGS = {
   // user grants the all-sites permission in Options.
   textActionsAllSites: false,            // Floating selection menu on all sites
   sitePacksEnabled: false,               // Slack/GitHub/Atlassian packs (Pro)
+  // Holographic OS overlay — "the page becomes the desktop". ON: the apex has
+  // caught up and the full contract now holds end-to-end.
+  //
+  // The contract is implemented on both sides: this extension frames
+  // aitherium.com/?mode=overlay, and the OS detects it, skips the boot sequence,
+  // posts `os-ready`, and publishes `os-regions` (the rects of the dock and any
+  // open windows) so the host clips the overlay to exactly that chrome and every
+  // other pixel falls through to the page.
+  //
+  // Why it was OFF and why it is safe now. Measured 2026-07-31, `develop` —
+  // which is what the apex publishes — contained ZERO occurrences of
+  // `aither-os-overlay`: os-client.tsx had been adding that class to <html> since
+  // overlay mode was written and nothing styled it, so the OS painted its full
+  // OPAQUE desktop over every site, and the overlay was a full-viewport copy of
+  // the homepage on top of the page.
+  //
+  // The transparency CSS + hit markers have since landed on develop and GitHub
+  // Pages republished the apex. VERIFIED LIVE 2026-08-08 (AitherBrowser):
+  //   - https://aitherium.com/?mode=overlay renders `html.aither-os-overlay`,
+  //     #os-desktop-root, and ONLY chrome ([data-os-hit]: the AITHER window +
+  //     dock), with `background: transparent` on html/body — the host page shows
+  //     through.
+  //   - the OS posts `os-ready` AND `os-regions` from inside a cross-origin
+  //     iframe on example.com; the bridge reveals (opacity 1) and the command
+  //     bar is removed.
+  // The condition in the old comment ("verify by loading
+  // https://aitherium.com/?mode=overlay and seeing through it") has been met, so
+  // the gate is obsolete. aither-overlay-bridge.js now also CLIPS to os-regions,
+  // so the OS chrome is live and every other pixel falls through without an
+  // Alt+Space toggle.
+  osOverlayEnabled: true,
+  // The command bar: a full-width Aither bar injected into every page. It is
+  // ALSO the only in-page driver for the X/LinkedIn social automation (see
+  // content/aither-command-bar.js — PLATFORM === "x" starts the post/engage
+  // loops there).
+  //
+  // This was flipped to `false` on 2026-07-31 alongside osOverlayEnabled,
+  // reasoning "both are page injection and both are now opt-in". That was wrong
+  // in two ways and cost the owner a fortnight of dead automation:
+  //   1. NOTHING renders a toggle for it — grep options/, popup/, sidepanel/:
+  //      zero hits. "Opt-in" with no opt-in control is just deleted, and the
+  //      bar became unreachable dead code on every site including x.com.
+  //   2. It is not merely cosmetic like the overlay. Turning it off ALSO
+  //      stopped social automation, because the bar is the in-page driver —
+  //      and the bar had already written the service worker's copy off (the
+  //      xAutopostEnabled trap below). Both drivers ended up disabled and the
+  //      extension posted nothing, with no error anywhere.
+  // The overlay's problem was an opaque full-viewport iframe; the bar has never
+  // had that failure mode, it draws one strip and offers its own hide control
+  // (`aitherBarHidden`). So it ships ON, with a real toggle in options.
+  // Do not flip this to false again without adding a control that can flip it back.
+  commandBarEnabled: true,
 };
 
 // Live settings object — populated from storage on startup
@@ -124,10 +177,11 @@ let THEMIS_URL = `http://${LOOPBACK}:3000/api/bridge/themis`;
 let NEWSWIRE_URL = `http://${LOOPBACK}:3000/api/bridge/newswire`;
 let LYRAWIKI_URL = `http://${LOOPBACK}:3000/api/bridge/lyra-wiki`;
 let BROWSER_URL = `http://${LOOPBACK}:3000/api/bridge/browser`;  // AitherBrowser (Playwright capture/crawl)
+let BONSAI_URL = `http://${LOOPBACK}:3000/api/bridge/bonsai`;    // Bonsai Image (FLUX.2 ternary 4B)
 
 // ── AitherBrowser bridge ─────────────────────────────────────────────────────
 // The helpers live in shared/aitherbrowser.js so they can be imported by
-// tests/run-tests.mjs — a service worker cannot be (D-922).
+// tests/run-tests.mjs — a service worker cannot be directly imported by a test runner.
 const browserError = (resp) => AitherBrowserBridge.readError(resp);
 
 
@@ -149,12 +203,13 @@ function recalcUrls() {
     NEWSWIRE_URL = `${base}/services/newswire`;
     LYRAWIKI_URL = `${base}/services/lyra-wiki`;
     BROWSER_URL = `${base}/services/browser`;
+    BONSAI_URL = `${base}/services/bonsai`;
     RELAY_URL = SETTINGS.relayUrl || `${base}/services/relay`;
     RELAY_WS = SETTINGS.relayWsUrl || `${wsBase}/ws/chat`;
   } else if (DETECTED_TIER === "node-only" && TIER_URLS.chatUrl) {
-    // Node-only mode — direct HTTP to AitherNode (no TLS issue on localhost).
+    // Node-only mode — direct HTTP to awnode (no TLS issue on localhost).
     //
-    // AitherNode >= 0.2.0 is a persistent host service with an allowlisted
+    // awnode >= 0.2.0 is a persistent host service with an allowlisted
     // reverse-proxy plane (/proxy/{service}/...) that terminates plain HTTP
     // on loopback and forwards to the internal-CA HTTPS fleet services.
     // That means node tier is no longer chat-only: Search and Browser ride
@@ -169,6 +224,7 @@ function recalcUrls() {
     NEXUS_URL = "";
     SEARCH_URL = `${nodeBase}/proxy/search`;
     BROWSER_URL = `${nodeBase}/proxy/browser`;
+    BONSAI_URL = `${nodeBase}/proxy/bonsai`;
     STRATA_URL = "";
     THEMIS_URL = "";
     NEWSWIRE_URL = "";
@@ -189,6 +245,7 @@ function recalcUrls() {
     // (AitherSearch has no public origin). ${SEARCH_URL}/search hits the
     // worker's /search route; ${SEARCH_URL}/health hits the gateway /health.
     SEARCH_URL = gateway;
+    BONSAI_URL = gateway;  // Image generation via cloud gateway
     STRATA_URL = "";
     THEMIS_URL = "";
     NEWSWIRE_URL = "";
@@ -239,6 +296,14 @@ function recalcUrls() {
       GENESIS_WS = "";
       PULSE_URL = MIND_URL = NEXUS_URL = SEARCH_URL = STRATA_URL = "";
       NODE_URL = THEMIS_URL = NEWSWIRE_URL = LYRAWIKI_URL = BROWSER_URL = "";
+      // BONSAI_URL belongs in this list too. It is reached through the Veil
+      // bridge, so in genesis-direct mode (Veil down) its default still points
+      // at http://127.0.0.1:3000/api/bridge/bonsai — an endpoint that cannot
+      // exist in this mode. Image generation then fails and the user is told
+      // "Bonsai unreachable", which is a lie: it was never configured for this
+      // deployment mode. Same class as the "reported down beside a healthy
+      // Genesis" comment above — a misconfiguration wearing an outage's clothes.
+      BONSAI_URL = "";
       RELAY_URL = SETTINGS.relayUrl || "";
       RELAY_WS = SETTINGS.relayWsUrl || "";
     }
@@ -314,12 +379,12 @@ async function autoDetectTier() {
   _tierDemoteStrikes = decision.strikes;
   if (!decision.adopt) {
     console.log(
-      `[AitherConnect] Ignoring tier demotion ${DETECTED_TIER} → ${newTier} — ${decision.reason}`,
+      `[Awconnect] Ignoring tier demotion ${DETECTED_TIER} → ${newTier} — ${decision.reason}`,
     );
     return;  // keep the current tier, URLs, and capabilities untouched
   }
   if (decision.reason.startsWith("demotion")) {
-    console.warn(`[AitherConnect] Tier demotion ${DETECTED_TIER} → ${newTier}: ${decision.reason}`);
+    console.warn(`[Awconnect] Tier demotion ${DETECTED_TIER} → ${newTier}: ${decision.reason}`);
   }
 
   const tierChanged = newTier !== DETECTED_TIER;
@@ -345,7 +410,7 @@ async function autoDetectTier() {
   updateBadge(aitherOSStatus);
 
   if (tierChanged) {
-    console.log(`[AitherConnect] Tier changed: ${DETECTED_TIER} → URLs:`, TIER_URLS);
+    console.log(`[Awconnect] Tier changed: ${DETECTED_TIER} → URLs:`, TIER_URLS);
     broadcastToSidePanel({
       type: "tier-changed",
       tier: DETECTED_TIER,
@@ -375,7 +440,7 @@ async function ensureServerSessionId() {
     sessionId = crypto.getRandomValues(new Uint8Array(6))
       .reduce((acc, byte) => acc + byte.toString(16).padStart(2, '0'), '');
     await chrome.storage.local.set({ "aither_server_session_id": sessionId });
-    console.log("[AitherConnect] Created server session ID:", sessionId);
+    console.log("[Awconnect] Created server session ID:", sessionId);
   }
   return sessionId;
 }
@@ -387,13 +452,13 @@ async function persistEntitlement(ent) {
       "aither-entitlement": { ...ent, fetchedAt: Date.now() },
     });
   } catch (e) {
-    console.warn("[AitherConnect] Could not persist entitlement:", e);
+    console.warn("[Awconnect] Could not persist entitlement:", e);
   }
 }
 
 /**
  * Auto-pull the authenticated user's entitlement from the gateway and reflect
- * it as the AitherConnect tier — "if you're signed in with a valid
+ * it as the Awconnect tier — "if you're signed in with a valid
  * subscription, the system just pulls it." Prefers a signed license envelope
  * (offline-capable); falls back to reflecting the /auth/me tier.
  *
@@ -434,7 +499,7 @@ async function pullEntitlement() {
     }
     // 501 (no signing key) or any non-2xx → fall through to reflect.
   } catch (e) {
-    console.debug("[AitherConnect] connect/license mint unavailable:", e.message);
+    console.debug("[Awconnect] connect/license mint unavailable:", e.message);
   }
 
   // 2) Reflect the tier from /auth/me (no offline proof, but auto-updates
@@ -463,7 +528,7 @@ async function pullEntitlement() {
         return { ok: true, tier };
       }
     } catch (e) {
-      console.debug(`[AitherConnect] /auth/me reflect via ${url} failed:`, e.message);
+      console.debug(`[Awconnect] /auth/me reflect via ${url} failed:`, e.message);
     }
   }
   return { ok: false, reason: "no entitlement resolved" };
@@ -483,7 +548,7 @@ async function loadSettings() {
       // baseUrl is only used for remote mode; local mode always uses http://localhost:veilPort.
     }
   } catch (e) {
-    console.warn("[AitherConnect] Could not load settings:", e);
+    console.warn("[Awconnect] Could not load settings:", e);
   }
   recalcUrls();
 }
@@ -493,6 +558,11 @@ async function saveSettings(newSettings) {
   SETTINGS = { ...DEFAULT_SETTINGS, ...newSettings };
   await chrome.storage.sync.set({ "aither-settings": SETTINGS });
   recalcUrls();
+  // Injection is otherwise driven by tabs.onUpdated, which only fires on a
+  // LOAD. Without this sweep, flipping the command bar on in options appears
+  // to do nothing until every open tab is manually reloaded — which reads as
+  // "the toggle is broken" and is how the feature got written off before.
+  sweepInjectables().catch(() => {});
 }
 
 // ── BYOK provider config ─────────────────────────────────────────────
@@ -506,7 +576,7 @@ async function loadProviderConfig() {
     const stored = await chrome.storage.local.get("aither-provider");
     PROVIDER_CFG = stored["aither-provider"] || null;
   } catch (e) {
-    console.warn("[AitherConnect] Could not load provider config:", e);
+    console.warn("[Awconnect] Could not load provider config:", e);
     PROVIDER_CFG = null;
   }
 }
@@ -526,7 +596,7 @@ function providerConfigured() {
 // Pack config installed at setup: { origin, port, anchor:{selector,key_selector},
 // ignore:[], self_check:[] }. Captured batches go to the LOCAL engine ONLY —
 // the endpoint is hard-coded loopback; there is no remote fallback by design
-// (.PRODUCTS/.FORMBRIDGE/06-SECURITY-MODEL.md).
+// (see the FormBridge product's security model doc).
 
 let FORMBRIDGE_CFG = null;
 let DISCOVERY_CFG = null;          // { origin } when Discovery mode is on
@@ -544,7 +614,7 @@ async function loadFormbridgeConfig() {
     API_CFG = stored["aither-formbridge-api"] || null;
     formbridgeQueue = stored["aither-formbridge-queue"] || [];
   } catch (e) {
-    console.warn("[AitherConnect] Could not load formbridge config:", e);
+    console.warn("[Awconnect] Could not load formbridge config:", e);
     FORMBRIDGE_CFG = null;
     API_CFG = null;
   }
@@ -562,15 +632,23 @@ function formbridgeUrl(path) {
 // for. This is why it works where server-side posting (no API credits) and
 // cookie export (Chrome app-bound encryption) both fail.
 
-function xNotify(msg, ok) {
-  try {
-    chrome.notifications.create({
-      type: "basic",
-      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-      title: ok ? "Posted to X" : "AitherConnect — X",
-      message: msg,
-    });
-  } catch { /* notifications optional */ }
+// Notification click routing: each notification may carry an explicit
+// destination; without one, clicks fall back to the public portal. This is what
+// stops EVERY toast from dumping the owner on the portal dashboard — the
+// "X / Social stats toast opens workspace/dashboard" report.
+const _notificationTargets = new Map();
+function notifyWithTarget(id, url, props) {
+  if (url) _notificationTargets.set(id, url);
+  try { chrome.notifications.create(id, props); } catch { /* notifications optional */ }
+}
+
+function xNotify(msg, ok, targetUrl) {
+  notifyWithTarget("aither-x-" + Date.now(), targetUrl, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+    title: ok ? "Posted to X" : "Awconnect — X",
+    message: msg,
+  });
 }
 
 // Ask the fleet to write the tweet in Aither's voice. Tries the dedicated X
@@ -579,28 +657,175 @@ function xNotify(msg, ok) {
 // today) with a fresh, rotating brief so no two posts are the same. Only if the
 // whole fleet is unreachable does it use a varied local line — never a single
 // hardcoded string, which is the bug the first version had.
+// Compose ENTIRELY in the browser on WebGPU — instant, local, no fleet call and
+// no auth. The owner's browser has a GPU; the fleet's headless one does not, and
+// the fleet's shared models are frequently too saturated to compose in the ~30s a
+// click can wait. Uses the same offscreen inference host as the sidepanel chat,
+// but resolves with the generated text instead of streaming to a panel. First use
+// downloads the model (minutes, one time); every compose after that is seconds.
+// `opts.maxTokens` matters more than it looks. The default of 100 is sized for a
+// tweet. The engage planner asks for JSON that CONTAINS a reply of up to 200
+// characters plus the likes array — comfortably past 100 tokens — and a truncated
+// answer fails `JSON.parse`, which this code reports as "no plan", which the
+// caller correctly treats as "skip". So an on-device engage loop would have run,
+// produced nothing, and looked exactly like the fleet being down. Give each
+// caller a budget that fits what it asked for.
+async function webmlComposeText(prompt, opts) {
+  let requestedId = (self.AitherWebMLModels && AitherWebMLModels.DEFAULT_WEBML_MODEL_ID) || "bonsai-4b";
+  try { const s = await chrome.storage.local.get(["aitherWebmlModel"]); if (s.aitherWebmlModel) requestedId = s.aitherWebmlModel; } catch { /* use default */ }
+  let caps;
+  try { caps = await getWebMLCapabilities(); } catch { caps = { webgpu: false }; }
+  if (!caps || !caps.webgpu) return null; // no GPU here — let the caller fall through
+
+  // FALLBACK LADDER. The default brain is bonsai-27b-text — 3.8 GB, "needs a
+  // real desktop GPU (e.g., RTX 4090)". On a smaller GPU the load fails, and
+  // the OLD code returned null immediately, which the caller read as "no
+  // brain" and fell through to the fleet — so a free GPU that merely couldn't
+  // hold 27B silently killed ALL on-device composition/engagement. Never give
+  // up on the local GPU after one model: try the requested one first, then
+  // step DOWN through the lighter ready models. First-load downloads can take
+  // minutes on a slow pipe, so a model is only abandoned on a real error or
+  // a 5-minute progress stall, never on impatience.
+  const ready = (self.AitherWebMLModels?.WEBML_MODELS || [])
+    .filter((m) => m.ready)
+    .sort((a, b) => (b.approxDownloadMB || 0) - (a.approxDownloadMB || 0));
+  const ladder = [requestedId, ...ready.map((m) => m.id).filter((id) => id !== requestedId)];
+
+  for (const modelId of ladder) {
+    const text = await webmlComposeOne(prompt, opts, modelId);
+    if (text) return text;
+  }
+  return null;
+}
+
+// One on-device compose attempt on a specific model. Returns generated text or
+// null on failure (caller steps the ladder). Releases the inference lock in
+// every path so the next attempt can take the pipeline.
+async function webmlComposeOne(prompt, opts, modelId) {
+  const flowId = nextInferenceFlowId();
+  const release = await acquireInference();
+  let port;
+  try { port = await getInferencePort(); }
+  catch { release(); return null; }
+
+  const text = await new Promise((resolve) => {
+    let full = "";
+    let done = false;
+    const generateReq = {
+      type: "generate",
+      messages: [{ role: "user", content: prompt }],
+      maxTokens: (opts && opts.maxTokens) || 100,
+      temperature: (opts && opts.temperature) || 0.9,
+      flowId,
+    };
+    let watchdog;
+    const finish = (val) => {
+      if (done) return;
+      done = true;
+      clearTimeout(watchdog);
+      port.onMessage.removeListener(onMsg);
+      release();
+      resolve(val);
+    };
+    // First load can be minutes; after that, tokens flow. Reset on every event.
+    const bump = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => finish(full || null), 5 * 60 * 1000);
+    };
+    const onMsg = (msg) => {
+      if (done || !msg || (msg.flowId !== undefined && msg.flowId !== flowId)) return;
+      bump();
+      if (msg.type === "ready") { _lastLoadedWebMLModelId = msg.modelId; port.postMessage(generateReq); }
+      else if (msg.type === "token") { full += msg.text || ""; }
+      else if (msg.type === "done") { finish((msg.text || full || "").trim() || null); }
+      else if (msg.type === "error") { finish(null); }
+    };
+    port.onMessage.addListener(onMsg);
+    bump();
+    // Skip the load round-trip if this model is already warm in the offscreen doc.
+    if (_lastLoadedWebMLModelId === modelId) port.postMessage(generateReq);
+    else port.postMessage({ type: "load", modelId, flowId });
+  });
+
+  return text ? String(text).replace(/^["']|["']$/g, "").trim().slice(0, 275) : null;
+}
+
+// Fetch web search context for composition. Returns an object with:
+// { success: boolean, error: string|null, results: [{title, url, snippet}], answer: string|null }
+// On network/auth error: success=false, error=<msg>, results=[], answer=null
+// On "no results": success=true, error=null, results=[], answer=null (caller can distinguish)
+async function xGetSearchContext(topic) {
+  const SEARCH_URL = `http://127.0.0.1:${SETTINGS.searchPort}`;
+  const SEARCH_TIMEOUT_MS = 15000;
+
+  // Build auth headers — same as composition calls.
+  const searchHeaders = { "Content-Type": "application/json" };
+  if (DETECTED_TIER === "cloud-only" && SETTINGS.cloudApiKey) {
+    searchHeaders["Authorization"] = `Bearer ${SETTINGS.cloudApiKey}`;
+    searchHeaders["X-API-Key"] = SETTINGS.cloudApiKey;
+  }
+  if (SETTINGS.tenantId) {
+    searchHeaders["X-Tenant-ID"] = SETTINGS.tenantId;
+  }
+  if (SETTINGS.workspaceId) {
+    searchHeaders["X-Workspace-ID"] = SETTINGS.workspaceId;
+  }
+
+  try {
+    const resp = await fetch(`${SEARCH_URL}/search`, {
+      method: "POST",
+      headers: searchHeaders,
+      body: JSON.stringify({
+        query: topic,
+        mode: "quick",
+        limit: 5,
+        include_answer: true,
+      }),
+      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    });
+
+    // CRITICAL: Distinguish auth errors from empty results.
+    if (!resp.ok) {
+      // 401/403 = auth failure; others = network/server error
+      const isAuthError = resp.status === 401 || resp.status === 403;
+      const msg = isAuthError
+        ? `Search auth error (${resp.status})`
+        : `Search failed (HTTP ${resp.status})`;
+      console.warn(`[xGetSearchContext] ${msg} for "${topic}"`);
+      return { success: false, error: msg, results: [], answer: null };
+    }
+
+    const data = await resp.json().catch(() => ({}));
+
+    // Validate response shape and extract results.
+    const results = (data.results && Array.isArray(data.results))
+      ? data.results.map((r) => ({
+          title: r.title || r.name || "(untitled)",
+          url: r.url || r.link || "",
+          snippet: r.snippet || r.content || "",
+        }))
+      : [];
+
+    const answer = (data.answer && String(data.answer).trim()) || null;
+
+    // Return as success even if results are empty (caller can distinguish).
+    return { success: true, error: null, results, answer };
+  } catch (e) {
+    // Network/timeout/parsing error.
+    const errorMsg = e.name === "AbortError"
+      ? "Search timeout"
+      : `Search error: ${e.message || String(e).slice(0, 100)}`;
+    console.warn(`[xGetSearchContext] ${errorMsg} for "${topic}"`);
+    return { success: false, error: errorMsg, results: [], answer: null };
+  }
+}
+
 async function xComposeText(promptOverride) {
   // Config-driven brief: if the command bar / a fleet agent supplied a prompt,
   // use it (with the rotating angle appended for variety); else the built-in.
   const cfgPrompt = (promptOverride && String(promptOverride).trim()) || "";
-  // 1) The real X composer, when its route is deployed.
-  for (const url of [`${GENESIS_URL}/social/x/tick`, `${NODE_URL}/social/x/tick`]) {
-    try {
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dry_run: true }),
-        signal: AbortSignal.timeout(30000),
-      });
-      const d = await r.json().catch(() => ({}));
-      const t = d && (d.text || (d.result && d.result.text));
-      if (t && String(t).trim()) return String(t).trim();
-    } catch { /* try next */ }
-  }
 
-  // 2) Aither's chat brain via Genesis /chat (reachable through the bridge).
-  //    A rotating angle keeps each post distinct. Response shape varies across
-  //    genesis versions, so accept any of the common text fields.
+  // Build the brief up front so the in-browser and fleet paths share it.
   const angles = [
     "a builder's note on shipping AI infrastructure that runs itself",
     "one sharp, non-obvious lesson from building autonomous agents",
@@ -609,12 +834,53 @@ async function xComposeText(promptOverride) {
     "a contrarian take on agent autonomy worth arguing with",
   ];
   const angle = angles[Math.floor(Date.now() / 60000) % angles.length];
+
+  // ENHANCEMENT: Try to fetch web search context to enrich the prompt.
+  // This is optional — if search fails or returns empty, we compose without it.
+  let searchContext = "";
+  try {
+    const searchTopic = cfgPrompt
+      ? "latest AI infrastructure and agent autonomy"  // Generic fallback if user provided prompt
+      : "AI agents autonomous systems self-hosting";
+    const search = await xGetSearchContext(searchTopic);
+
+    // Only include search results if we got them AND no auth error.
+    if (search.success && search.results.length > 0) {
+      const snippets = search.results
+        .slice(0, 3)  // Use top 3 results
+        .map((r) => `"${r.title}" (${r.url})`)
+        .join("; ");
+      searchContext = `\n(Current context from web: ${snippets})`;
+      console.log(`[xComposeText] Enriching prompt with ${search.results.length} search results`);
+    } else if (!search.success) {
+      // Auth or network error — log it but don't fail the composition.
+      console.warn(`[xComposeText] Search error, composing without context: ${search.error}`);
+    } else {
+      // Search succeeded but returned no results — that's OK, compose without context.
+      console.log(`[xComposeText] No search results for "${searchTopic}", composing without context`);
+    }
+  } catch (e) {
+    // Catch-all: if search setup itself fails, log and continue.
+    console.warn(`[xComposeText] Search setup error: ${e.message}, composing without context`);
+  }
+
   const prompt = cfgPrompt
-    ? `${cfgPrompt}\n\n(Angle for variety: ${angle}. Return only the post text.)`
+    ? `${cfgPrompt}\n\n(Angle for variety: ${angle}. Return only the post text.)${searchContext}`
     : `Write ONE original tweet (under 260 characters) in Aither's own `
       + `voice: ${angle}. First person as Aither, an AI that runs its own `
       + `infrastructure. No hashtags, no quotes around it, no emojis unless it `
-      + `genuinely lands. Return only the tweet text.`;
+      + `genuinely lands. Return only the tweet text.${searchContext}`;
+
+  // 1) PRIMARY: compose in the browser on WebGPU — instant and local. This is the
+  //    answer to "why is it too slow": no fleet round-trip, no saturated shared
+  //    model. Real Aither text, written on the owner's own GPU.
+  try {
+    const local = await webmlComposeText(prompt);
+    if (local && local.trim()) return local.trim();
+  } catch { /* GPU missing or load failed — fall through to the fleet brain */ }
+
+  // 2) FALLBACK (machines without WebGPU): Aither's chat brain via Genesis /chat.
+  //    Real text too, just slower when the fleet's models are cold/saturated.
   for (const url of [`${GENESIS_URL}/chat`, `${GENESIS_URL}/api/chat`]) {
     try {
       const r = await fetch(url, {
@@ -638,9 +904,118 @@ async function xComposeText(promptOverride) {
   return null;
 }
 
+// ── Image Generation (Bonsai Image service) ──────────────────────────────────
+// Generates an image using Bonsai Image (FLUX.2 Klein ternary 4B) and returns
+// base64-encoded PNG. On failure (Bonsai unreachable, timeout, bad response),
+// returns null and logs the error — HONEST DEGRADATION — so the text post still
+// goes out without the image rather than failing silently.
+async function xGenerateImage(text) {
+  // NOT CONFIGURED is a different fact from NOT REACHABLE, and conflating them
+  // sends the owner to debug a service that was never wired for this tier.
+  // Every other tier-optional service guards this way (see the BROWSER_URL
+  // checks); image generation was the one that just let the fetch fail and
+  // reported it as an outage.
+  if (!BONSAI_URL) {
+    console.warn("[x-autopost] Bonsai Image not configured for this tier — posting text-only (NOT an outage)");
+    return null;
+  }
+  // Derive image prompt from post text (max 60 chars for diversity)
+  const imagePrompt = `A visual representation of: ${text.slice(0, 60)}. Professional, modern, clean design.`;
+
+  const payload = {
+    prompt: imagePrompt,
+    negative_prompt: "",
+    width: 1024,
+    height: 576,
+    num_images: 1,
+    seed: Math.floor(Math.random() * 1000000),
+  };
+
+  try {
+    const resp = await fetch(`${BONSAI_URL}/v1/generate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Caller-Type": "PLATFORM",
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!resp.ok) {
+      const errorText = await resp.text().catch(() => "");
+      console.warn(
+        `[xGenerateImage] HTTP ${resp.status} from Bonsai Image: ${errorText.slice(0, 200)}`
+      );
+      return null;
+    }
+
+    const data = await resp.json().catch(() => ({}));
+    const images = data.images || [];
+
+    if (!images.length) {
+      console.warn("[xGenerateImage] Bonsai Image returned no images in response");
+      return null;
+    }
+
+    // Bonsai returns bare base64, no data: prefix
+    return images[0];
+  } catch (e) {
+    const msg = e.name === "AbortError"
+      ? "timeout (30s)"
+      : `${e.message || String(e).slice(0, 100)}`;
+    console.warn(`[xGenerateImage] Failed to generate image: ${msg}. Post will continue as text-only.`);
+    return null;
+  }
+}
+
+// Route a free-form ask to the SELECTED backend and RETURN the text. Powers the
+// Aither-OS taskbar's chat + quick-ask on every website. On-device uses the
+// WebGPU host (no auth, no fleet); the others are OpenAI-compatible endpoints or
+// genesis /chat over the local bridge.
+async function askAither(prompt, backend) {
+  backend = backend || "aither-local";
+  if (backend === "aither-local") {
+    const t = await webmlComposeText(prompt);
+    if (t) return t;
+    throw new Error("On-device model isn't ready yet (still downloading?)");
+  }
+  const routes = {
+    "aither-genesis": [{ url: `${GENESIS_URL}/chat`, kind: "genesis" }, { url: `${GENESIS_URL}/api/chat`, kind: "genesis" }],
+    "aither-node":    [{ url: `${NODE_URL}/chat`, kind: "genesis" }, { url: "http://127.0.0.1:8090/v1/chat/completions", kind: "openai" }],
+    "aither-gateway": [{ url: "https://gateway.aitherium.com/v1/chat/completions", kind: "openai" }],
+    "aither-mcp":     [{ url: "https://mcp.aitherium.com/v1/chat/completions", kind: "openai" }],
+  }[backend] || [];
+  const hdrs = { "Content-Type": "application/json", ...authHeaders() };
+  let lastErr = "no route configured";
+  for (const r of routes) {
+    try {
+      const body = r.kind === "openai"
+        ? { model: "auto", messages: [{ role: "user", content: prompt }], stream: false }
+        : { message: prompt, stream: false };
+      const resp = await fetch(r.url, {
+        method: "POST", headers: hdrs, body: JSON.stringify(body),
+        signal: AbortSignal.timeout(90000),
+      });
+      const d = await resp.json().catch(() => ({}));
+      const t = d.response || d.answer || d.text || d.message || d.content
+        || (d.choices && d.choices[0] && ((d.choices[0].message && d.choices[0].message.content) || d.choices[0].text));
+      if (t && String(t).trim()) return String(t).trim();
+      lastErr = d.error || d.detail || `HTTP ${resp.status}`;
+    } catch (e) { lastErr = e.message; }
+  }
+  throw new Error(`${backend}: ${lastErr}`);
+}
+
 // Runs IN the page (MAIN world). Fills x.com's composer via execCommand (which
-// the Draft.js editor treats as real input) and clicks Post. Returns a verdict.
-function AITHER_X_PAGE_POSTER(text) {
+// the Draft.js editor treats as real input), attaches an image if provided,
+// and clicks Post. Returns a verdict with result.attached indicating whether
+// an image was successfully attached.
+//
+// Parameters:
+//   text: the post text (required)
+//   imageBase64: base64-encoded PNG image (optional; if omitted, text-only post)
+function AITHER_X_PAGE_POSTER(text, imageBase64) {
   return new Promise(async (resolve) => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     async function waitFor(sels, ms) {
@@ -654,15 +1029,81 @@ function AITHER_X_PAGE_POSTER(text) {
       }
       return null;
     }
+
+    // Helper to attach image via file input simulation
+    async function attachImage(base64Png) {
+      if (!base64Png || typeof base64Png !== "string" || base64Png.length < 100) {
+        console.warn("[AITHER_X_PAGE_POSTER] Invalid base64 image data, skipping image attachment");
+        return false;
+      }
+
+      try {
+        // Find the file input (X's media upload button)
+        // X.com uses input[type="file"] with various data-testids
+        const fileInputs = document.querySelectorAll('input[type="file"]');
+        if (!fileInputs.length) {
+          console.warn("[AITHER_X_PAGE_POSTER] No file input found, skipping image attachment");
+          return false;
+        }
+
+        // Convert base64 to blob
+        const binaryString = atob(base64Png);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: "image/png" });
+
+        // Create a File object
+        const file = new File([blob], "aither-post.png", { type: "image/png" });
+
+        // Set the file on the input (this doesn't trigger upload yet)
+        const fileInput = fileInputs[0];
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+        fileInput.files = dataTransfer.files;
+
+        // Trigger change event (X listens to this)
+        const changeEvent = new Event("change", { bubbles: true });
+        fileInput.dispatchEvent(changeEvent);
+
+        // Wait for X's UI to process the upload
+        await sleep(3000);
+
+        return true;
+      } catch (e) {
+        console.warn(`[AITHER_X_PAGE_POSTER] Image attachment failed: ${e.message}`);
+        return false;
+      }
+    }
+
     try {
       const composer = await waitFor(
         ['div[data-testid="tweetTextarea_0"]', 'div[role="textbox"][contenteditable="true"]'],
         12000
       );
-      if (!composer) { resolve({ ok: false, reason: "no_composer", url: location.href }); return; }
+      if (!composer) { resolve({ ok: false, reason: "no_composer", url: location.href, attached: false }); return; }
       composer.focus();
+      // Clear any leftover draft FIRST. A stale tick's text would otherwise be
+      // APPENDED to this post (the tweet goes out doubled) and the composer is
+      // left holding text again — the exact "stays typed, ready to post again"
+      // the owner keeps hitting. This also stops a slow click from double-typing.
+      try { document.execCommand("selectAll", false, null); document.execCommand("delete", false, null); await sleep(150); } catch {}
       document.execCommand("insertText", false, text);
       await sleep(900);
+
+      // Attempt image attachment if provided
+      let attached = false;
+      if (imageBase64) {
+        attached = await attachImage(imageBase64);
+        if (attached) {
+          console.log("[AITHER_X_PAGE_POSTER] Image attached successfully");
+        } else {
+          console.log("[AITHER_X_PAGE_POSTER] Image attachment failed, continuing with text-only post");
+        }
+        await sleep(2000);  // Wait for image processing
+      }
+
       const btnSel = ['button[data-testid="tweetButton"]', 'button[data-testid="tweetButtonInline"]'];
       let btn = null;
       for (let i = 0; i < 25; i++) {
@@ -671,20 +1112,52 @@ function AITHER_X_PAGE_POSTER(text) {
         await sleep(200);
       }
       if (!btn || btn.disabled || btn.getAttribute("aria-disabled") === "true") {
-        resolve({ ok: false, reason: "post_button_disabled" }); return;
+        resolve({ ok: false, reason: "post_button_disabled", attached }); return;
       }
       btn.click();
-      await sleep(3500);
-      const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
-      const cleared = !box || (box.innerText || "").trim().length === 0;
-      resolve({ ok: true, cleared });
+      // Do NOT trust the click. A post is real only when the composer clears
+      // (modal closed / route changed) or X confirms with a toast. Poll for
+      // either; if neither appears, wipe the composer so it can never sit
+      // "ready to post again" — and report the truth instead of a fake success.
+      let cleared = false, confirmed = false;
+      for (let i = 0; i < 40; i++) { // up to ~8s
+        await sleep(200);
+        const boxAfter = document.querySelector('div[data-testid="tweetTextarea_0"]');
+        cleared = !boxAfter || (boxAfter.innerText || "").trim().length === 0;
+        confirmed = cleared || Array.from(document.querySelectorAll('[data-testid="toast"], div[role="status"]'))
+          .some((n) => /sent|posted|shared/i.test(n.innerText || ""));
+        if (confirmed) break;
+      }
+      const wipe = () => {
+        const b = document.querySelector('div[data-testid="tweetTextarea_0"]');
+        if (!b || (b.innerText || "").trim().length === 0) return;
+        b.focus();
+        try { document.execCommand("selectAll", false, null); document.execCommand("delete", false, null); } catch {}
+      };
+      if (!confirmed) {
+        wipe();
+        const dup = Array.from(document.querySelectorAll('div[role="alert"], [data-testid="toast"]'))
+          .some((n) => /already said that|duplicate/i.test(n.innerText || ""));
+        resolve({ ok: false, reason: dup ? "duplicate" : "composer_not_cleared", attached }); return;
+      }
+      // Confirmed posted. If the composer is somehow still holding the text
+      // (X's "post another" flow keeps the editor as a draft), clear it so a
+      // second click cannot double-post.
+      if (!cleared) {
+        const b = document.querySelector('div[data-testid="tweetTextarea_0"]');
+        if (b && (b.innerText || "").trim().length > 0) {
+          b.focus();
+          try { document.execCommand("selectAll", false, null); document.execCommand("delete", false, null); } catch {}
+        }
+      }
+      resolve({ ok: true, cleared, attached });
     } catch (e) {
-      resolve({ ok: false, reason: "exception", error: String(e).slice(0, 200) });
+      resolve({ ok: false, reason: "exception", error: String(e).slice(0, 200), attached: false });
     }
   });
 }
 
-async function xPostInTab(tabId, text) {
+async function xPostInTab(tabId, text, imageBase64) {
   // Bring the tab to the compose surface so the composer definitely exists.
   try {
     await chrome.tabs.update(tabId, { url: "https://x.com/compose/post" });
@@ -702,11 +1175,11 @@ async function xPostInTab(tabId, text) {
   } catch { /* proceed; the composer may already be present */ }
   try {
     const [res] = await chrome.scripting.executeScript({
-      target: { tabId }, world: "MAIN", args: [text], func: AITHER_X_PAGE_POSTER,
+      target: { tabId }, world: "MAIN", args: [text, imageBase64], func: AITHER_X_PAGE_POSTER,
     });
-    return res?.result || { ok: false, reason: "no_result" };
+    return res?.result || { ok: false, reason: "no_result", attached: false };
   } catch (e) {
-    return { ok: false, reason: "inject_failed", error: String(e).slice(0, 200) };
+    return { ok: false, reason: "inject_failed", error: String(e).slice(0, 200), attached: false };
   }
 }
 
@@ -714,10 +1187,25 @@ async function xComposeAndPost(tab) {
   if (!tab || !tab.id) { xNotify("Open x.com in a tab first.", false); return { ok: false }; }
   xNotify("Aither is writing a post…", true);
   const text = await xComposeText();
-  const result = await xPostInTab(tab.id, text);
+  if (!text) {
+    xNotify("Aither could not write a post. Try again in a moment.", false);
+    return { ok: false };
+  }
+
+  // Generate an image for the post (optional; if it fails, we still post the text)
+  xNotify("Generating image…", true);
+  const imageBase64 = await xGenerateImage(text);
+  if (imageBase64) {
+    xNotify("Image ready. Posting…", true);
+  } else {
+    xNotify("Image generation skipped. Posting text-only…", true);
+  }
+
+  const result = await xPostInTab(tab.id, text, imageBase64);
   if (result.ok) {
-    xNotify(`Posted: “${text.slice(0, 80)}”`, true);
-    await xLogActivity({ type: "post", text: text.slice(0, 200) });
+    const mediaNote = result.attached ? " with image" : "";
+    xNotify(`Posted: “${text.slice(0, 80)}”${mediaNote}`, true);
+    await xLogActivity({ type: "post", text: text.slice(0, 200), image: !!result.attached });
   } else {
     xNotify(`Post failed (${result.reason || result.error}). Make sure you're on x.com and logged in.`, false);
   }
@@ -725,7 +1213,7 @@ async function xComposeAndPost(tab) {
   try {
     await fetch(`${GENESIS_URL}/social/x/posted`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ok: result.ok, text, result }),
+      body: JSON.stringify({ ok: result.ok, text, image: result.attached, result }),
       signal: AbortSignal.timeout(8000),
     });
   } catch { /* fire-and-forget */ }
@@ -798,15 +1286,52 @@ function AITHER_X_DO_ENGAGE(plan) {
 
 // Aither decides what to engage with. One /chat call over the feed → a JSON plan.
 // Budgets are enforced here regardless of what the model returns.
-async function xEngagePlan(feed) {
+async function xEngagePlan(feed, promptOverride) {
   const summary = feed.map((t) => `[${t.idx}] @${t.handle}: ${t.text.slice(0, 180)}`).join("\n");
-  const prompt = "You are Aither, engaging on X to grow an audience around AI "
-    + "infrastructure, agents, and building in public. Current feed:\n" + summary
-    + "\n\nChoose up to 3 tweets to LIKE (genuinely relevant to AI/infra/agents/"
-    + "building) and optionally ONE to REPLY to with a short, real, non-spammy "
-    + "reply in Aither's first-person voice (under 200 chars, no hashtags, adds "
-    + "something). Return ONLY JSON: "
+  // The command bar's strategy dialog lets the owner edit the engage brief and
+  // sends it as `social-engage-plan {feed, prompt}` — but this function's
+  // signature was `(feed)`, so the second argument was dropped on the floor.
+  // Editing the strategy appeared to save (it does persist to storage) and then
+  // changed nothing about what Aither actually did. Same shape as every other
+  // defect in this file: a configured control wired to nothing.
+  const brief = (promptOverride && String(promptOverride).trim()) || "";
+  const rules = "\n\nReturn ONLY JSON: "
     + '{"likes":[idx,...],"reply":{"idx":N,"text":"..."}} or with "reply":null.';
+  const prompt = brief
+    ? `You are Aither, engaging on X. Current feed:\n${summary}\n\n${brief}${rules}`
+    : "You are Aither, engaging on X to grow an audience around AI "
+      + "infrastructure, agents, and building in public. Current feed:\n" + summary
+      + "\n\nChoose up to 3 tweets to LIKE (genuinely relevant to AI/infra/agents/"
+      + "building) and optionally ONE to REPLY to with a short, real, non-spammy "
+      + "reply in Aither's first-person voice (under 200 chars, no hashtags, adds "
+      + "something)." + rules;
+  // Parse + clamp a model answer into a plan, or null if it isn't one.
+  const parse = (text) => {
+    const plan = self.AitherSocialPlan.extractJsonObject(text);
+    if (!plan) return null;
+    const valid = new Set(feed.map((f) => f.idx));
+    plan.likes = (plan.likes || []).filter((i) => valid.has(i)).slice(0, 3);
+    if (!plan.reply || !plan.reply.text || !valid.has(plan.reply.idx)) plan.reply = null;
+    else plan.reply.text = String(plan.reply.text).slice(0, 260);
+    return plan;
+  };
+
+  // 1) PRIMARY: the on-device WebGPU brain — same path xComposeText uses.
+  //    This planner used to be fleet-ONLY, which is why the owner saw posts but
+  //    never replies: with the fleet unreachable every tick fell through to the
+  //    canned branch below, which likes two arbitrary tweets and replies to
+  //    nothing. Engagement looked alive and the reply loop had never once run.
+  //    Autonomy cannot be contingent on the fleet — during the Podman migration
+  //    there IS no fleet, and Aither still has to run its own accounts.
+  try {
+    // Lower temperature than the poster: this answer has to be parseable JSON,
+    // not interesting prose. 320 tokens fits likes + a 200-char reply with room.
+    const local = await webmlComposeText(prompt, { maxTokens: 320, temperature: 0.4 });
+    const plan = parse(local);
+    if (plan) return plan;
+  } catch { /* no WebGPU / model still loading — try the fleet */ }
+
+  // 2) FALLBACK: Aither's chat brain via Genesis, when the fleet is up.
   for (const url of [`${GENESIS_URL}/chat`, `${GENESIS_URL}/api/chat`]) {
     try {
       const r = await fetch(url, {
@@ -817,25 +1342,552 @@ async function xEngagePlan(feed) {
       });
       const d = await r.json().catch(() => ({}));
       const t = d && (d.response || d.answer || d.text || d.message || d.content);
-      const jm = t && String(t).match(/\{[\s\S]*\}/);
-      if (jm) {
-        const plan = JSON.parse(jm[0]);
-        const valid = new Set(feed.map((f) => f.idx));
-        plan.likes = (plan.likes || []).filter((i) => valid.has(i)).slice(0, 3);
-        if (!plan.reply || !plan.reply.text || !valid.has(plan.reply.idx)) plan.reply = null;
-        else plan.reply.text = String(plan.reply.text).slice(0, 260);
-        return plan;
-      }
-    } catch { /* try next / fall back */ }
+      const plan = parse(t);
+      if (plan) return plan;
+    } catch { /* try next */ }
   }
-  // Fallback: like the first two fresh items, no reply.
-  return { likes: feed.slice(0, 2).map((t) => t.idx), reply: null };
+
+  // NO CANNED FALLBACK — matching xComposeText's "if Aither did not write it, we
+  // do not post". Liking two arbitrary tweets because no model answered is not
+  // engagement, it is noise on the owner's account that also disguises a total
+  // brain outage as a working loop. Skip the tick and say so.
+  return null;
 }
 
-async function xEngageTick() {
+// ── Who drives X automation: this service worker, or an in-page command bar? ──
+//
+// Both can run post/engage loops, and running both double-posts. The bar used to
+// resolve that by writing `xAutopostEnabled:false, xEngageEnabled:false` — the
+// USER's kill switch — into storage. That write is permanent, so once the bar
+// stopped injecting (commandBarEnabled defaulted false with no UI), the service
+// worker went on obeying a kill switch nobody had set. Both drivers off, no
+// error, no log line: the account posted nothing for weeks and every surface
+// still said "enabled".
+//
+// A lease fixes the shape of the bug, not just this instance: the bar renews
+// `xPageDriverAt` once a minute while it is alive, and the claim EXPIRES. If the
+// bar goes away for any reason — disabled, crashed, tab closed, feature deleted —
+// the service worker resumes on its own. Nothing has to remember to clean up.
+const X_PAGE_DRIVER_TTL_MS = 5 * 60 * 1000; // 5× the 60s renew interval
+
+/** One-time repair of a kill switch poisoned by the old command-bar write.
+ *
+ *  We cannot ask storage who wrote a `false`. What we can use is the signature:
+ *  the bar always wrote BOTH keys false in a single set(), and at the time this
+ *  ran there was no user control for either key at all — options/options.html's
+ *  "Social Automation (X)" section was added in the same change as this repair,
+ *  and content/x-control-panel.js, which has such toggles, is never injected by
+ *  anything. So on any profile predating that section, an exact both-false pair
+ *  can only have come from the bar. We clear it exactly once, marked by
+ *  `xKillSwitchRepairedAt`, so a deliberate later opt-out is never overridden.
+ *  A user who genuinely disabled both gets them re-enabled a single time — visible,
+ *  reversible, and strictly better than automation that is dead forever in silence. */
+let _xKillSwitchRepaired = false;
+async function repairXKillSwitch() {
+  if (_xKillSwitchRepaired) return;
+  _xKillSwitchRepaired = true;
   try {
+    const s = await chrome.storage.local.get([
+      "xAutopostEnabled", "xEngageEnabled", "xKillSwitchRepairedAt",
+    ]);
+    if (s.xKillSwitchRepairedAt) return;              // already done on this profile
+    if (s.xAutopostEnabled === false && s.xEngageEnabled === false) {
+      await chrome.storage.local.remove(["xAutopostEnabled", "xEngageEnabled"]);
+      console.warn(
+        "[Awconnect] Cleared an X kill switch written by the old command-bar " +
+        "coordination path — post/engage were both disabled with no user action. " +
+        "Re-disable from the on-page bar or options if that was intentional.",
+      );
+      xNotify("X automation re-enabled (cleared a stale internal kill switch)", true);
+    }
+    await chrome.storage.local.set({ xKillSwitchRepairedAt: Date.now() });
+  } catch (e) {
+    // Could not read storage -> could not judge. Allow a retry on the next tick
+    // rather than recording a repair that never happened.
+    _xKillSwitchRepaired = false;
+    console.debug("[Awconnect] kill-switch repair deferred:", e);
+  }
+}
+
+/** True when an in-page command bar is currently driving X automation, so this
+ *  tick should stand down to avoid double-posting. */
+async function xPageDriverActive() {
+  try {
+    const s = await chrome.storage.local.get(["xPageDriverAt"]);
+    return !!(s.xPageDriverAt && Date.now() - s.xPageDriverAt < X_PAGE_DRIVER_TTL_MS);
+  } catch {
+    return false; // cannot confirm a driver -> drive it ourselves
+  }
+}
+
+// ── Identity ────────────────────────────────────────────────────────────────
+//
+// resolveIdentity()/applyIdentity() were inline inside the message switch, which
+// meant the ONLY way the extension ever learned who you are was a human clicking
+// "Sign in" in the side panel's Setup tab. The portal cookie could be sitting in
+// this very browser the whole time and nothing looked at it. They are functions
+// now so install, startup and a portal login can all drive them.
+
+/** Find a credential and resolve the caller's identity.
+ *  Never throws for an auth failure — returns {ok:false, ...} instead. */
+async function resolveIdentity() {
+  // 1. Find a token: settings API key > cloud gateway key > portal cookie.
+  //    cloudApiKey is the credential pullEntitlement() uses (gateway-issued
+  //    aither_sk_*/aither_pat_*) — omitting it here meant a cloud-authenticated
+  //    user resolved a tier but never an identity, and the badge sat at
+  //    "no workspace" forever (the sidepanel refuses to apply `unverified`
+  //    cached identities, so nothing ever escaped it).
+  let token = SETTINGS.apiKey || SETTINGS.cloudApiKey || null;
+  let source = token ? (SETTINGS.apiKey ? "settings" : "cloud-key") : null;
+
+  if (!token) {
+    for (const domain of ["portal.aitherium.com", "demo.aitherium.com", ".aitherium.com"]) {
+      try {
+        const cookie = await chrome.cookies.get({ url: `https://${domain.replace(/^\./, "")}`, name: "aither_auth_token" });
+        if (cookie?.value) {
+          token = cookie.value;
+          source = `cookie:${domain}`;
+          break;
+        }
+      } catch { /* no cookie access */ }
+    }
+  }
+
+  // Publish the discovered credential as the PORTAL BEARER.
+  //
+  // Without this the cookie path resolved an identity and then dropped the
+  // token on the floor: `aither_portal_bearer` was written ONLY by the
+  // in-extension email+password login (portal-api.js portalLogin /
+  // portalVerify2fa). A user signed in at portal.aitherium.com in this very
+  // browser therefore had every portal API call go out with NO Authorization
+  // header — extension fetches are cross-origin to the portal, so the cookie
+  // is never attached either. Three symptoms, one cause:
+  //   * /api/me/workspaces  -> 401 -> empty list -> "no workspace"
+  //   * mintRelayToken()    -> "not authenticated" -> IRC/relay never connects
+  //   * pullEntitlement()   -> "not authenticated" -> owner stuck on tier Free
+  if (token) {
+    try { await self.AitherPortal.setPortalBearer(token); } catch { /* no session storage */ }
+  }
+
+  // Track WHY a verify failed so a transient outage isn't reported as a
+  // logout: 401/403 = token actually rejected (truly logged out);
+  // network error / timeout / 5xx = verifier unreachable (still signed in).
+  let authRejected = false;
+
+  // 2. If we have a token, call /auth/me — walk EVERY surface we might be
+  //    authenticated against, exactly the set pullEntitlement() already walks.
+  //    The old code only tried the LOCAL Veil bridge (127.0.0.1:3000) when
+  //    remoteUrl was empty, so a cloud user with no local dev server never
+  //    resolved an identity: /auth/me was unreachable, the fallback returned a
+  //    cached identity flagged `unverified`, and the sidepanel's `!unverified`
+  //    guard dropped it — tier showed (pullEntitlement hits the gateway) while
+  //    the badge stayed "no workspace". First surface that answers 200 wins.
+  if (token) {
+    const meUrls = [];
+    if (SETTINGS.remoteUrl) meUrls.push(`${SETTINGS.remoteUrl.replace(/\/+$/, "")}/api/bridge/identity/auth/me`);
+    meUrls.push(`http://${LOOPBACK}:${SETTINGS.veilPort}/api/bridge/identity/auth/me`);
+    // The canonical cloud surface. The portal's OWN /api/me/profile accepts the
+    // aither_auth_token as a Bearer (getAuthHeaders forwards it) and proxies to
+    // Identity's real path — /identity/auth/me — which the generic
+    // /api/bridge/identity/auth/me catch-all does NOT (it maps to
+    // getServiceUrl('identity')/auth/me, missing the /identity prefix, and
+    // 401s on every call; verified live 2026-08-08).
+    meUrls.push("https://portal.aitherium.com/api/me/profile");
+    for (const identityUrl of meUrls) {
+      try {
+        const resp = await fetch(identityUrl, {
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (resp.ok) {
+          return { ok: true, source, identity: await resp.json(), token };
+        }
+        if (resp.status === 401 || resp.status === 403) {
+          authRejected = true;  // credentials genuinely invalid/expired
+        }
+        // 5xx / 429 / other → leave authRejected false (transient) and try next surface
+      } catch (e) {
+        console.debug("[Awconnect] Identity surface unreachable:", identityUrl, e.message);
+      }
+    }
+  }
+
+  // 3. Probe local Genesis for an AitherShell session (~/.aither/auth.json)
+  try {
+    const localUrl = SETTINGS.remoteUrl
+      ? `${SETTINGS.remoteUrl}/api/auth/local-session`
+      : `http://${LOOPBACK}:${SETTINGS.veilPort}/api/bridge/genesis/auth/local-session`;
+    const localResp = await fetch(localUrl, {
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (localResp.ok) {
+      const session = await localResp.json();
+      if (session.authenticated && session.user) {
+        return { ok: true, source: "local-genesis", identity: session.user, token: null };
+      }
+    }
+  } catch (e) {
+    console.debug("[Awconnect] Local session probe failed:", e.message);
+  }
+
+  // 4. Couldn't verify. If we have a usable token/credentials AND the failure
+  //    was transient (NOT a 401/403 rejection), the user is still signed in —
+  //    the verifier was just unreachable. Return the stored identity with an
+  //    `unverified` flag so the UI keeps the session instead of flipping to
+  //    "Not authenticated".
+  const haveStored = !!(token || SETTINGS.userId || SETTINGS.cloudApiKey);
+  if (haveStored && !authRejected) {
+    const _slug = (SETTINGS.tenantId || "").replace(/^tnt_/, "");
+    return {
+      ok: true,
+      unverified: true,
+      source: "cached",
+      token: token || null,
+      identity: {
+        username: SETTINGS.userId || "",
+        display_name: SETTINGS.userId || "",
+        tenant_id: SETTINGS.tenantId || "",
+        tenant_slug: _slug,
+        workspace_id: SETTINGS.workspaceId || "",
+        workspace_slug: SETTINGS.workspaceId || "",
+      },
+    };
+  }
+
+  return {
+    ok: false,
+    authRejected,
+    error: authRejected
+      ? "Your session expired or was rejected. Sign in again at portal.aitherium.com."
+      : "Not authenticated. Log in at portal.aitherium.com or run `aither login`.",
+  };
+}
+
+/** Ask the portal which workspaces this caller belongs to, and pick one.
+ *
+ *  `/auth/me` answers WHO you are; on this platform it does not always carry a
+ *  workspace, and a platform admin/owner is exactly the shape that comes back
+ *  with a tenant and no workspace binding. applyIdentity() used to just skip the
+ *  field in that case, so the badge read "no workspace" for the owner of the
+ *  platform while every underlying call was perfectly authenticated. The
+ *  workspace list has its own endpoint — ask it. */
+async function resolveDefaultWorkspace() {
+  try {
+    const res = await self.AitherPortal.fetchWorkspaceMetadata();
+    if (!res || !res.ok || !Array.isArray(res.workspaces) || !res.workspaces.length) return null;
+    const list = res.workspaces;
+    // Prefer an explicitly default/primary workspace, then one matching the
+    // active tenant, then simply the first the backend returned.
+    const slug = (SETTINGS.tenantId || "").replace(/^tnt_/, "");
+    const pick = list.find(w => w.is_default || w.default || w.primary)
+      || (slug && list.find(w => w.tenant_slug === slug || w.tenant_id === SETTINGS.tenantId))
+      || list[0];
+    return pick || null;
+  } catch (e) {
+    console.debug("[Awconnect] workspace lookup failed:", e.message);
+    return null;
+  }
+}
+
+/** Write a resolved identity into settings. Returns {ok, applied}. */
+async function applyIdentity(identity, token) {
+  if (!identity) return { ok: false, error: "no identity" };
+  const updates = {};
+  if (identity.tenant_id) updates.tenantId = identity.tenant_id;
+  // Workspace: prefer workspace_id/slug from /auth/me or the local session.
+  if (identity.workspace_id) {
+    updates.workspaceId = identity.workspace_id;
+  } else if (identity.workspace_slug) {
+    updates.workspaceId = identity.workspace_slug;
+  }
+  if (identity.username) updates.userId = identity.username;
+  // Also accept email as userId fallback (local session may have email but not username)
+  if (!updates.userId && identity.email) updates.userId = identity.email;
+  if (token && !SETTINGS.apiKey) updates.apiKey = token;
+
+  // Publish the bearer BEFORE the workspace lookup — that call needs it.
+  if (token) {
+    try { await self.AitherPortal.setPortalBearer(token); } catch { /* no session storage */ }
+  }
+  // Still no workspace? Ask the portal rather than leaving the badge empty.
+  if (!updates.workspaceId && !SETTINGS.workspaceId) {
+    const ws = await resolveDefaultWorkspace();
+    if (ws) {
+      updates.workspaceId = ws.id || ws.workspace_id || ws.slug || "";
+      if (!updates.tenantId && (ws.tenant_id || ws.tenantId)) {
+        updates.tenantId = ws.tenant_id || ws.tenantId;
+      }
+    }
+  }
+
+  await saveSettings({ ...SETTINGS, ...updates });
+  // Persist the scopes this user may switch to (from /auth/me).
+  try {
+    const meta = identity.metadata || {};
+    await chrome.storage.local.set({
+      "aither-scopes": {
+        allowed: identity.allowed_tenants || [],
+        owns: meta.owns_tenants || [],
+        current: identity.tenant_slug || identity.tenant_id || "",
+        defaultScope: meta.default_scope || "",
+        updatedAt: Date.now(),
+      },
+    });
+  } catch (e) {
+    console.warn("[Awconnect] Could not persist scopes:", e);
+  }
+  setTimeout(() => { connectToGenesis(); checkHealth(); }, 500);
+  // Now that we're authenticated, pull the subscription tier automatically.
+  pullEntitlement().catch(() => {});
+  // Tell every live OS overlay iframe who just signed in — it cannot see the
+  // portal session cookie (cross-site iframe), so the taskbar would sit at
+  // "sign in" forever without this handoff.
+  broadcastIdentityToOverlays();
+  return { ok: true, applied: updates };
+}
+
+/** Cheap, sync snapshot of the current identity from settings — no network.
+ *  This is what applyIdentity() persists, so it is the OS taskbar's source of
+ *  truth for "who am I". */
+function buildIdentityFromSettings() {
+  const slug = (SETTINGS.tenantId || "").replace(/^tnt_/, "");
+  return {
+    username: SETTINGS.userId || "",
+    display_name: SETTINGS.userId || "",
+    tenant_id: SETTINGS.tenantId || "",
+    tenant_slug: slug,
+    workspace_id: SETTINGS.workspaceId || "",
+    workspace_slug: SETTINGS.workspaceId || "",
+    verified: !!(SETTINGS.userId || SETTINGS.tenantId || SETTINGS.workspaceId),
+  };
+}
+
+/** Push the current identity into every tab running the AitherOS overlay so the
+ *  OS taskbar (aitherium.com/?mode=overlay iframe) reflects who is signed in.
+ *  The iframe is cross-site, so background.js — which CAN resolve the portal
+ *  session — is the identity broker; the overlay bridge relays the postMessage. */
+async function broadcastIdentityToOverlays() {
+  const identity = buildIdentityFromSettings();
+  if (!identity.verified) return;
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const t of tabs) {
+      if (!t.id) continue;
+      try { await chrome.tabs.sendMessage(t.id, { action: "os-identity", identity }); }
+      catch { /* no overlay listener on this tab */ }
+    }
+  } catch { /* tabs permission unavailable */ }
+}
+
+/** Resolve + apply in one shot, but only when the stored scope is INCOMPLETE.
+ *
+ *  The old guard lived in the side panel and read
+ *  `if (!settings.tenantId && !settings.userId)`. The badge, 4000 lines away,
+ *  renders "no workspace" unless `tenantId || workspaceId` is set. Those two
+ *  conditions disagree, and the gap between them is a real state: a userId with
+ *  no tenant and no workspace. In it, the guard says "already configured, skip"
+ *  and the badge says "no workspace" — permanently, on every launch, with no way
+ *  out but the manual Sign-in button. That is the state the owner was stuck in.
+ *  Resolve whenever the scope is incomplete, not whenever it is empty. */
+async function autoResolveIdentity(reason) {
+  try {
+    if (SETTINGS.tenantId && SETTINGS.workspaceId && SETTINGS.userId) return null;
+    const result = await resolveIdentity();
+    if (result?.ok && result.identity && !result.unverified) {
+      const applied = await applyIdentity(result.identity, result.token);
+      console.log(`[Awconnect] identity auto-resolved (${reason}) via ${result.source}:`, applied.applied);
+      return applied;
+    }
+    return null;
+  } catch (e) {
+    console.debug("[Awconnect] auto identity resolve failed:", e.message);
+    return null;
+  }
+}
+
+// ── Tenant apps ─────────────────────────────────────────────────────────────
+//
+// The Apps grid used to be a 35-entry array typed by hand into sidepanel.js. It
+// had no relationship to what this tenant actually has: it listed apps that were
+// never deployed here and could not list an app the owner deployed yesterday.
+// That is what "the app selection is completely random" means — it is not a
+// ranking bug, there was simply no query. Genesis owns the real answer:
+//   GET /apps/deployments  — what this tenant is RUNNING (tenant_apps.py:818)
+//   GET /apps/catalog      — what it COULD install         (tenant_apps.py:779)
+// Both are scoped by the X-Tenant-ID / X-Workspace-ID headers authHeaders()
+// already sends, which is why this had to wait on the identity fix above: with
+// no workspace resolved, these return another tenant's view or nothing at all.
+
+// The registry's `icon` is a Lucide icon NAME, not a glyph — measured against
+// live genesis /apps/catalog, which returns e.g. {"slug":"demiurge","icon":"code"}.
+// The grid renders the field verbatim, so passing it through would print the
+// word "code" where the icon goes on every card.
+//
+// This map used to cover 20 generic names picked without checking what the
+// catalog actually contains, and matched only 4 of the 18 real app manifests
+// (aitherium/brain, demiurge/code, jgames/wrench, shell/terminal) — the other
+// 14 fell through to the puzzle-piece fallback below, which is why the grid
+// was mostly green puzzle pieces regardless of icon field even being present.
+// Every entry here was copied from the platform's actual app-manifest catalog
+// (grepped the icon field across every real manifest) — the real vocabulary,
+// not a guess. Keep this in step when a new manifest introduces an icon name
+// this map doesn't have; the fallback below is a stopgap, not a design choice.
+const _APP_ICON_BY_NAME = {
+  archive: "🗄️", "bar-chart-3": "📊", "book-open": "📖", "book-text": "📚",
+  bot: "🤖", box: "📦", brain: "🧠", briefcase: "💼", calculator: "🧮",
+  camera: "📷", castle: "🏰", chart: "📈", chat: "💬", cloud: "☁️",
+  code: "💻", "code-2": "💻", compass: "🧭", cpu: "🖥️", "credit-card": "💳",
+  crown: "👑", database: "🗄️", eye: "👁️", "file-text": "📄", film: "🎬",
+  fingerprint: "🔏", "flask-conical": "⚗️", flask: "⚗️", "git-branch": "🌿",
+  globe: "🌐", "graduation-cap": "🎓", grid: "▦", "hard-drive": "💽",
+  "hard-hat": "👷", image: "🖼️", "key-round": "🔑", landmark: "🏛️",
+  leaf: "🍃", library: "📚", link: "🔗", lock: "🔒", mail: "✉️",
+  calendar: "📅", megaphone: "📣", mic: "🎙️", network: "🕸️",
+  palette: "🎨", "scan-eye": "👁️", search: "🔍", server: "🖥️",
+  settings: "⚙️", shield: "🛡️", "shield-check": "🛡️", "shopping-bag": "🛍️",
+  sparkles: "✨", star: "⭐", store: "🏪", terminal: "⌨️",
+  book: "📚", robot: "🤖", video: "🎬", file: "📁", wrench: "🔧",
+  users: "👥", zap: "⚡",
+};
+function _appIcon(raw, installed) {
+  const v = raw.icon;
+  if (typeof v === "string" && v) {
+    // Anything non-ASCII is already a glyph — pass it through untouched.
+    if (/[^\x00-\x7F]/.test(v)) return v;
+    const mapped = _APP_ICON_BY_NAME[v.toLowerCase()];
+    if (mapped) return mapped;
+  }
+  return installed ? "📦" : "🧩";
+}
+
+/** Normalise one backend record into the shape the Apps grid renders.
+ *
+ * Route priority, most-real-first:
+ *   1. subdomain_url  — the product's OWN dedicated domain (tenant_apps.py sets
+ *      this from manifest.subdomain, e.g. "https://garg.aitherium.com"). This is
+ *      the one field that is guaranteed to actually resolve for a hosted
+ *      product; it was never read before, so a card would take the LESS
+ *      reliable endpoint_url even when a real subdomain existed.
+ *   2. veil_route     — set only for deployment_mode:"embedded" apps, which
+ *      really do live at a path inside the current Veil instance.
+ *   3. endpoint_url    — genesis's computed portal-relative URL
+ *      (https://portal.aitherium.com/apps/<slug>). Absolute, but only correct
+ *      if the portal actually serves a generic embed route for this slug —
+ *      unverified per-app, so it ranks below the two routes above.
+ * If NONE of those exist, the app has no real destination — most commonly a
+ * deployment_mode:"local" workspace (runs via `aither serve --workspace` on
+ * someone's own machine) surfaced identically to an always-on hosted product.
+ * Synthesizing a fake `/apps/<slug>` route here used to paper over that: the
+ * card looked like every other app and 404'd/refused-to-connect on click with
+ * no explanation. route is now null in that case — see isAppOpenable() in the
+ * side panel, which the grid uses to badge these honestly instead of hiding
+ * the failure behind a normal-looking tile. */
+function _normalizeTenantApp(raw, installed) {
+  const slug = raw.slug || raw.app_slug || raw.id || raw.name;
+  if (!slug) return null;
+  const route = raw.subdomain_url || raw.veil_route || raw.route || raw.endpoint_url || null;
+  return {
+    id: String(slug),
+    name: raw.display_name || raw.name || String(slug),
+    icon: _appIcon(raw, installed),
+    route,
+    localOnly: raw.deployment_mode === "local",
+    category: raw.category || "tenant",
+    desc: raw.description || raw.desc || (installed ? "Deployed in this workspace" : "Available to install"),
+    status: raw.status === "beta" ? "beta" : "stable",
+    installed: !!installed,
+    source: "registry",
+  };
+}
+
+/** Fetch this tenant's deployed + installable apps.
+ *
+ *  Returns {ok:true, apps, degraded:false} on a real answer, or
+ *  {ok:false, error} when the registry could not be reached. It does NOT
+ *  silently return an empty list on failure: the caller must be able to tell
+ *  "this tenant has no apps" apart from "I could not ask", because those render
+ *  identically and the second one is what makes a grid look random. */
+async function listTenantApps() {
+  const base = GENESIS_URL;               // veil bridge -> genesis
+  const headers = authHeaders();
+  const get = async (path) => {
+    const r = await fetch(`${base}${path}`, { headers, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(`${path} -> HTTP ${r.status}`);
+    const body = await r.json();
+    return Array.isArray(body) ? body : (body.items || body.apps || body.deployments || []);
+  };
+
+  // Deployments are the ones that matter; the catalog is a bonus. A catalog
+  // failure must not lose the deployed list, so they settle independently.
+  const [dep, cat] = await Promise.allSettled([get("/apps/deployments"), get("/apps/catalog")]);
+  if (dep.status === "rejected" && cat.status === "rejected") {
+    return { ok: false, error: `app registry unreachable: ${dep.reason?.message || "unknown"}` };
+  }
+
+  const apps = [];
+  const seen = new Set();
+  for (const [res, installed] of [[dep, true], [cat, false]]) {
+    if (res.status !== "fulfilled") continue;
+    for (const raw of res.value) {
+      const app = _normalizeTenantApp(raw, installed);
+      if (!app || seen.has(app.id)) continue;   // a deployed app wins over its catalog twin
+      seen.add(app.id);
+      apps.push(app);
+    }
+  }
+  return {
+    ok: true,
+    apps,
+    // True when we got a partial answer — surfaced in the UI rather than hidden.
+    degraded: dep.status === "rejected" || cat.status === "rejected",
+    deployedFailed: dep.status === "rejected",
+  };
+}
+
+/** (Re)create the X automation alarms.
+ *
+ *  Called from BOTH onInstalled and onStartup. It used to live only in
+ *  onInstalled: alarms do survive a browser restart, so that mostly worked —
+ *  but "mostly" is the wrong guarantee for the thing that decides whether the
+ *  account posts at all. If the alarm set is ever lost (profile copy, storage
+ *  eviction, a disable/enable cycle that skips onInstalled) nothing recreates
+ *  it and the automation is dead until a reinstall, with every UI still
+ *  reporting "enabled". `chrome.alarms.create` on an existing name just
+ *  rewrites it, so calling this repeatedly is free. */
+async function ensureXAlarms() {
+  const s = await chrome.storage.local.get([
+    "xAutopostIntervalMin", "xEngageIntervalMin", "xDiscoverIntervalMin",
+  ]);
+  const postMins = Number(s.xAutopostIntervalMin) || 180; // ~8/day default
+  chrome.alarms.create("x-autopost", { periodInMinutes: postMins, delayInMinutes: 1 });
+  // Engagement runs more often than posting — that's where growth comes from.
+  const engMins = Number(s.xEngageIntervalMin) || 60; // hourly default
+  chrome.alarms.create("x-engage", { periodInMinutes: engMins, delayInMinutes: 3 });
+  // Discovery: search topics, follow accounts, engage beyond the home feed.
+  const discMins = Number(s.xDiscoverIntervalMin) || 150; // ~every 2.5h
+  chrome.alarms.create("x-discover", { periodInMinutes: discMins, delayInMinutes: 5 });
+  // Daily digest: roll up the day's activity + follower trend into one notice.
+  chrome.alarms.create("x-daily-summary", { periodInMinutes: 1440, delayInMinutes: 10 });
+  // LinkedIn mirrors X — autonomous post/engage/discover, so the account runs
+  // even when no linkedin tab is open. The on-page bar (liPageDriverAt lease)
+  // drives instead when it is present; same model as X.
+  const liPostMins = Number(s.liAutopostIntervalMin) || 360;
+  chrome.alarms.create("li-autopost", { periodInMinutes: liPostMins, delayInMinutes: 2 });
+  const liEngMins = Number(s.liEngageIntervalMin) || 120;
+  chrome.alarms.create("li-engage", { periodInMinutes: liEngMins, delayInMinutes: 4 });
+  const liDiscMins = Number(s.liDiscoverIntervalMin) || 240;
+  chrome.alarms.create("li-discover", { periodInMinutes: liDiscMins, delayInMinutes: 6 });
+}
+
+async function xEngageTick(force) {
+  try {
+    await repairXKillSwitch();
     const s = await chrome.storage.local.get(["xEngageEnabled"]);
-    if (s.xEngageEnabled === false) return; // kill switch
+    if (s.xEngageEnabled === false) return; // kill switch (user intent only)
+    // The on-page bar has the wheel — UNLESS the bar itself handed us the work
+    // (its page had no feed, e.g. a profile tab, and it asked us to run).
+    if (!force && await xPageDriverActive()) return;
     let tabs = await chrome.tabs.query({ url: ["*://x.com/*", "*://twitter.com/*"] });
     let tab = tabs && tabs[0];
     if (!tab) tab = await chrome.tabs.create({ url: "https://x.com/home", active: false });
@@ -849,11 +1901,35 @@ async function xEngageTick() {
       });
     });
     await new Promise((r) => setTimeout(r, 2500));
+    // Scroll the feed a few times before reading. Engagement used to see only
+    // the ~10-15 posts rendered on load, so it kept picking from the same top
+    // slice every hour — shallow and repetitive by construction. Loading a few
+    // screens down surfaces newer candidates.
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id }, world: "MAIN",
+        func: () => new Promise((resolve) => {
+          const el = document.querySelector('div[data-testid="primaryColumn"], main') || document.scrollingElement || document.documentElement;
+          let n = 0;
+          const step = () => { if (n++ >= 3) { resolve(true); return; } try { el.scrollTop += 1800; } catch { /* non-scroller */ } setTimeout(step, 1600); };
+          step();
+        }),
+      });
+    } catch { /* scroll is best-effort */ }
     const [{ result: feed } = {}] = await chrome.scripting.executeScript({
       target: { tabId: tab.id }, world: "MAIN", func: AITHER_X_READ_FEED, args: [15],
     });
     if (!feed || !feed.length) return;
     const plan = await xEngagePlan(feed);
+    if (!plan) {
+      // Neither the on-device model nor the fleet produced a plan. Skipping is
+      // correct — but skipping SILENTLY is how this loop looked healthy for weeks
+      // while never replying to anything. Make a brain outage visible.
+      console.warn("[Awconnect] x-engage skipped: no model produced a plan "
+        + "(on-device WebGPU unavailable and fleet unreachable)");
+      xNotify("X engage skipped — no brain available (on-device model not ready, fleet unreachable)", false);
+      return;
+    }
     const [{ result: done } = {}] = await chrome.scripting.executeScript({
       target: { tabId: tab.id }, world: "MAIN", func: AITHER_X_DO_ENGAGE, args: [plan],
     });
@@ -862,7 +1938,7 @@ async function xEngageTick() {
       await xLogActivity({ type: "engage", liked: done.liked || 0, replied: done.replied ? 1 : 0, source: "home" });
     }
   } catch (e) {
-    console.debug("[AitherConnect] x-engage tick failed:", e);
+    console.debug("[Awconnect] x-engage tick failed:", e);
   }
 }
 
@@ -915,11 +1991,69 @@ function AITHER_X_DO_FOLLOW(plan) {
 // no follow-for-follow spam). Budget enforced client-side.
 async function xDiscoverPlan(users, maxFollows) {
   const summary = users.map((u) => `[${u.idx}] @${u.handle}: ${u.text.slice(0, 140)}`).join("\n");
+  // PER-ACCOUNT VERDICT WITH A REASON, not "pick up to N".
+  //
+  // Measured on the real model 2026-08-02 (Bonsai-4B Q1_0 on the 5090, 24 tok/s):
+  // the old "Pick up to N genuinely relevant accounts ... NOT engagement-farmers"
+  // returned {"follow":[0,1,2]} — following a candidate literally described as
+  // "follow4follow crypto signals". Handed a shortlist and a budget, a small
+  // model returns the shortlist. The same model asked to judge EACH account and
+  // say WHY got all four right, including `follow:false` for both the botfarm and
+  // an NFT shill, with correct reasoning for each.
+  //
+  // That is not cosmetic: this is the loop that FOLLOWS people, capped at 15/day,
+  // and indiscriminate following is what X flags. A prompt that rubber-stamps the
+  // shortlist is only marginally better than the blind fallback that was removed.
   const prompt = "You are Aither, growing an audience around AI infrastructure, "
-    + "agents, and building in public. These accounts appeared in search:\n" + summary
-    + `\n\nPick up to ${maxFollows} genuinely relevant accounts worth following `
-    + "(real builders/researchers/tools in this space — NOT engagement-farmers, "
-    + "NOT unrelated). Return ONLY JSON: {\"follow\":[idx,...]}.";
+    + "agents, and building in public.\n\nJudge EACH account below. For each, "
+    + "decide follow true/false.\nfollow=true ONLY for real builders, researchers "
+    + "or tools in AI/infra/agents.\nfollow=false for engagement-farmers "
+    + "(follow4follow, 'like and RT'), crypto/NFT shills, and anything unrelated.\n\n"
+    + "Accounts:\n" + summary
+    + "\n\nReturn ONLY JSON, one entry per account, in order:\n"
+    + '{"verdicts":[{"idx":0,"follow":true,"why":"..."},...]}';
+  const parse = (text) => {
+    const plan = self.AitherSocialPlan.extractJsonObject(text);
+    if (!plan) return null;
+    const valid = new Set(users.map((u) => u.idx));
+    // Verdict shape is what we now ask for; the flat {"follow":[...]} is still
+    // accepted because a model that ignores the format should degrade to the old
+    // behaviour rather than to "no plan at all" (which skips the whole tick).
+    if (Array.isArray(plan.verdicts)) {
+      plan.follow = plan.verdicts
+        .filter((v) => v && v.follow === true && valid.has(v.idx))
+        .map((v) => v.idx);
+    }
+    plan.follow = (plan.follow || []).filter((i) => valid.has(i)).slice(0, maxFollows);
+    return plan;
+  };
+
+  // On-device brain first — same reason as xEngagePlan: the fleet is not a
+  // prerequisite for Aither running its own accounts. Low temperature because
+  // this answer has to parse, not read well.
+  try {
+    // Budget: 95 tokens per verdict (idx + follow + a one-line `why`), cap 1200.
+    //
+    // Sized against the candidate count, never a flat number, because truncation
+    // here fails QUIETLY in the worst way: the extractor falls back to the first
+    // COMPLETE inner object -- a single {"idx":0,"follow":true,"why":...} -- which
+    // has no verdicts array, so `plan.follow` resolves to [] and discovery follows
+    // nobody, on every tick, forever. Fail-closed (good) and invisible (not good).
+    //
+    // 95 comes from FIVE captured answers on the real model (Bonsai-4B Q1_0,
+    // 2026-08-02), not an estimate. Per-verdict cost varied 39-61 tokens across
+    // them; the worst was 1460 chars for 6 verdicts. An earlier coefficient of 65
+    // was derived from the single SMALLEST sample (39 tok/verdict) and looked like
+    // 1.66x headroom while really having 1.29x -- and it TRUNCATED outright at 15
+    // candidates. Sampling once and calling it measured is how that happened.
+    const local = await webmlComposeText(prompt, {
+      maxTokens: Math.min(1200, 120 + users.length * 95),
+      temperature: 0.3,
+    });
+    const plan = parse(local);
+    if (plan) return plan;
+  } catch { /* no WebGPU / model loading — try the fleet */ }
+
   for (const url of [`${GENESIS_URL}/chat`, `${GENESIS_URL}/api/chat`]) {
     try {
       const r = await fetch(url, {
@@ -930,16 +2064,20 @@ async function xDiscoverPlan(users, maxFollows) {
       });
       const d = await r.json().catch(() => ({}));
       const t = d && (d.response || d.answer || d.text || d.message || d.content);
-      const jm = t && String(t).match(/\{[\s\S]*\}/);
-      if (jm) {
-        const plan = JSON.parse(jm[0]);
-        const valid = new Set(users.map((u) => u.idx));
-        plan.follow = (plan.follow || []).filter((i) => valid.has(i)).slice(0, maxFollows);
-        return plan;
-      }
+      const plan = parse(t);
+      if (plan) return plan;
     } catch { /* try next */ }
   }
-  return { follow: users.slice(0, maxFollows).map((u) => u.idx) };
+
+  // NO BLIND FALLBACK. This used to `return { follow: users.slice(0, maxFollows) }`
+  // — follow the first N accounts a search returned, with no judgement at all,
+  // up to the 15/day cap. That is not "degraded discovery", it is the exact
+  // behaviour X flags as aggressive following, aimed at whoever happened to rank
+  // first for a topic query. It would have run on every tick that could not
+  // reach the fleet, which during the Podman migration is every tick.
+  // The prompt's whole job is "NOT engagement-farmers, NOT unrelated"; with no
+  // model there is nothing to enforce that, so follow nobody.
+  return null;
 }
 
 // Daily follow budget (X flags aggressive following hard). Resets each day.
@@ -986,18 +2124,33 @@ async function xDiscoverTick() {
     if (budget.remaining > 0) {
       const tab = await _xLoadTab(`https://x.com/search?q=${q}&src=typed_query&f=user`);
       const [{ result: users } = {}] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id }, world: "MAIN", func: AITHER_X_READ_SEARCH_USERS, args: [15],
+        // 6, not 15. Every candidate costs a full verdict+reason in the model's
+        // answer, and the per-tick follow cap is 3 — judging 15 to pick at most 3
+        // spends ~1000 tokens to reach the same decision, and risks truncating the
+        // answer into "follow nobody". Discovery rotates topics each tick, so a
+        // narrower slice per tick still covers the space.
+        target: { tabId: tab.id }, world: "MAIN", func: AITHER_X_READ_SEARCH_USERS, args: [6],
       });
       if (users && users.length) {
         const perTick = Math.min(3, budget.remaining);
         const plan = await xDiscoverPlan(users, perTick);
-        const [{ result: done } = {}] = await chrome.scripting.executeScript({
-          target: { tabId: tab.id }, world: "MAIN", func: AITHER_X_DO_FOLLOW, args: [plan],
-        });
-        if (done && done.followed) {
-          await xRecordFollows(done.followed, budget.today, budget.used);
-          xNotify(`Followed ${done.followed} in “${topic}”`, true);
-          await xLogActivity({ type: "follow", count: done.followed, topic });
+        if (!plan) {
+          // No brain -> no judgement about who is worth following. Skip only the
+          // FOLLOW step (step 2's topic engagement below is independent and has
+          // its own brain check); following anyway is what gets an account
+          // flagged, and a blind follow is not a degraded version of a judged
+          // one, it is a different and worse action.
+          console.warn(`[Awconnect] x-discover: no plan for "${topic}" `
+            + "(on-device model unavailable and fleet unreachable) — followed nobody");
+        } else {
+          const [{ result: done } = {}] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id }, world: "MAIN", func: AITHER_X_DO_FOLLOW, args: [plan],
+          });
+          if (done && done.followed) {
+            await xRecordFollows(done.followed, budget.today, budget.used);
+            xNotify(`Followed ${done.followed} in “${topic}”`, true);
+            await xLogActivity({ type: "follow", count: done.followed, topic });
+          }
         }
       }
     }
@@ -1009,16 +2162,287 @@ async function xDiscoverTick() {
     });
     if (feed && feed.length) {
       const plan = await xEngagePlan(feed);
-      const [{ result: done } = {}] = await chrome.scripting.executeScript({
-        target: { tabId: tab2.id }, world: "MAIN", func: AITHER_X_DO_ENGAGE, args: [plan],
-      });
-      if (done && (done.liked || done.replied)) {
-        xNotify(`“${topic}”: ${done.liked} likes${done.replied ? " + reply" : ""}`, true);
-        await xLogActivity({ type: "engage", liked: done.liked || 0, replied: done.replied ? 1 : 0, source: "discover", topic });
+      // xEngagePlan returns null when no model answered. Passing that straight
+      // into the injected function would reach `plan.likes` in the page and
+      // throw inside a MAIN-world script, where the failure is invisible to
+      // this try/catch's usual reporting.
+      if (!plan) {
+        console.warn(`[Awconnect] x-discover: no engage plan for "${topic}" `
+          + "(no brain available) — engaged nothing");
+      } else {
+        const [{ result: done } = {}] = await chrome.scripting.executeScript({
+          target: { tabId: tab2.id }, world: "MAIN", func: AITHER_X_DO_ENGAGE, args: [plan],
+        });
+        if (done && (done.liked || done.replied)) {
+          xNotify(`“${topic}”: ${done.liked} likes${done.replied ? " + reply" : ""}`, true);
+          await xLogActivity({ type: "engage", liked: done.liked || 0, replied: done.replied ? 1 : 0, source: "discover", topic });
+        }
       }
     }
   } catch (e) {
-    console.debug("[AitherConnect] x-discover tick failed:", e);
+    console.debug("[Awconnect] x-discover tick failed:", e);
+  }
+}
+
+// ── LinkedIn autonomous automation (mirrors the X loops) ─────────────────────
+// LinkedIn used to be bar-only: if no linkedin.com tab was open, NOTHING ran and
+// the account sat silent until a human opened a tab. These SW ticks open a tab
+// when none exists and drive post/engage/discover through their own page
+// functions, exactly like X. The on-page bar claims `liPageDriverAt` when it is
+// present and drives instead (its own scheduler already runs engage + post).
+
+const AITHER_LI_TOPICS = [
+  "AI agents", "LLM infrastructure", "self-hosted AI", "autonomous agents",
+  "AI automation", "open source AI", "MLOps", "enterprise AI", "machine learning platform",
+];
+
+async function liPageDriverActive() {
+  try {
+    const s = await chrome.storage.local.get(["liPageDriverAt"]);
+    return !!(s.liPageDriverAt && Date.now() - s.liPageDriverAt < X_PAGE_DRIVER_TTL_MS);
+  } catch { return false; }
+}
+
+// Page fn (MAIN world): read LinkedIn feed updates (button-anchored like the bar).
+function AITHER_LI_READ_FEED(limit) {
+  const likeButtons = () => Array.from(document.querySelectorAll("button")).filter((b) => {
+    const l = (b.getAttribute("aria-label") || "").toLowerCase();
+    return b.getAttribute("aria-pressed") !== "true" && (l.startsWith("like") || l.startsWith("react like"));
+  });
+  const container = (btn) => { let p = btn; for (let i = 0; i < 16 && p; i++) { p = p.parentElement; if (!p) break; const c = (p.className || "").toString(); if ((p.getAttribute && p.getAttribute("data-urn")) || /feed-shared-update|fie-impression|update-v2|occludable/.test(c)) return p; } return btn.closest('[role="article"], article') || btn.parentElement; };
+  const out = [];
+  const b = likeButtons();
+  for (let i = 0; i < b.length && out.length < (limit || 15); i++) {
+    const p = container(b[i]);
+    const t = ((p && p.innerText) || "").replace(/\s+/g, " ").trim();
+    if (t.length > 25) out.push({ idx: i, id: i, handle: null, text: t.slice(0, 300) });
+  }
+  return out;
+}
+
+// Page fn (MAIN world): execute a LinkedIn engagement plan (likes + one reply).
+function AITHER_LI_DO_ENGAGE(plan) {
+  return new Promise(async (resolve) => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const likeButtons = () => Array.from(document.querySelectorAll("button")).filter((b) => {
+      const l = (b.getAttribute("aria-label") || "").toLowerCase();
+      return b.getAttribute("aria-pressed") !== "true" && (l.startsWith("like") || l.startsWith("react like"));
+    });
+    const container = (btn) => { let p = btn; for (let i = 0; i < 16 && p; i++) { p = p.parentElement; if (!p) break; const c = (p.className || "").toString(); if ((p.getAttribute && p.getAttribute("data-urn")) || /feed-shared-update|fie-impression|update-v2|occludable/.test(c)) return p; } return btn.closest('[role="article"], article') || btn.parentElement; };
+    const done = { liked: 0, replied: false, errors: [] };
+    const b = likeButtons();
+    for (const idx of (plan.likes || [])) {
+      try { if (b[idx]) { b[idx].click(); done.liked++; await sleep(1800 + Math.random() * 2500); } } catch (e) { done.errors.push("like" + idx); }
+    }
+    if (plan.reply && plan.reply.text && Number.isInteger(plan.reply.idx)) {
+      try {
+        const p = b[plan.reply.idx] && container(b[plan.reply.idx]);
+        const cb = p && Array.from(p.querySelectorAll("button")).find((x) => /comment/i.test(x.getAttribute("aria-label") || ""));
+        if (cb) {
+          cb.click(); await sleep(2200);
+          const box = document.querySelector('.ql-editor[contenteditable="true"], div[role="textbox"][contenteditable="true"]');
+          if (box) {
+            box.focus(); document.execCommand("insertText", false, plan.reply.text); await sleep(1200);
+            let pb = document.querySelector('button.comments-comment-box__submit-button, button[class*="submit"]');
+            for (let i = 0; i < 25 && (!pb || pb.disabled); i++) { await sleep(200); pb = document.querySelector('button.comments-comment-box__submit-button, button[class*="submit"]'); }
+            if (pb && !pb.disabled) { pb.click(); done.replied = true; await sleep(2000); }
+          }
+        }
+      } catch (e) { done.errors.push("reply"); }
+    }
+    resolve(done);
+  });
+}
+
+// Page fn (MAIN world): open the LinkedIn share box, type, Post, and verify the
+// box closed. Same clear-before-type + verify-after-click contract as the X
+// poster, so a stale draft is never appended and the composer is never left
+// loaded ready to double-post.
+function AITHER_LI_PAGE_POSTER(text) {
+  return new Promise(async (resolve) => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const wait = async (sels, ms) => { const end = Date.now() + ms; while (Date.now() < end) { for (const s of sels) { const e = document.querySelector(s); if (e) return e; } await sleep(250); } return null; };
+    try {
+      const st = await wait(['button.share-box-feed-entry__trigger', 'button[class*="share-box-feed-entry"]'], 8000);
+      if (st) st.click();
+      const box = await wait(['.ql-editor[contenteditable="true"]', 'div[role="textbox"][contenteditable="true"]'], 10000);
+      if (!box) { resolve({ ok: false, reason: "no_composer" }); return; }
+      box.focus();
+      try { document.execCommand("selectAll", false, null); document.execCommand("delete", false, null); await sleep(150); } catch {}
+      document.execCommand("insertText", false, text); await sleep(1200);
+      let pb = await wait(['button.share-actions__primary-action', 'button[class*="share-actions__primary"]'], 5000);
+      for (let i = 0; i < 20 && (!pb || pb.disabled); i++) { await sleep(250); pb = document.querySelector('button.share-actions__primary-action, button[class*="share-actions__primary"]'); }
+      if (!pb || pb.disabled) { resolve({ ok: false, reason: "post_button_disabled" }); return; }
+      pb.click();
+      // Verify the post actually landed: the share box closes on success.
+      let confirmed = false;
+      for (let i = 0; i < 32; i++) { // up to ~8s
+        await sleep(250);
+        const editorGone = !document.querySelector('.ql-editor[contenteditable="true"], div[role="textbox"][contenteditable="true"]');
+        const boxGone = !document.querySelector('button.share-actions__primary-action, button[class*="share-actions__primary"]');
+        if (editorGone || boxGone) { confirmed = true; break; }
+      }
+      if (!confirmed) {
+        const bx = document.querySelector('.ql-editor[contenteditable="true"], div[role="textbox"][contenteditable="true"]');
+        if (bx) { bx.focus(); try { document.execCommand("selectAll", false, null); document.execCommand("delete", false, null); } catch {} }
+        resolve({ ok: false, reason: "composer_not_cleared" }); return;
+      }
+      resolve({ ok: true });
+    } catch (e) {
+      resolve({ ok: false, reason: "exception", error: String(e).slice(0, 200) });
+    }
+  });
+}
+
+// Page fn (MAIN world): read LinkedIn people-search result cells + follow status.
+function AITHER_LI_READ_SEARCH_USERS(limit) {
+  const cells = Array.from(document.querySelectorAll('li.entity-result, div.entity-result__content')).slice(0, limit);
+  return cells.map((c, idx) => {
+    const followBtn = Array.from(c.querySelectorAll("button")).find((b) => /^follow/i.test((b.getAttribute("aria-label") || "").trim()));
+    const unfollowBtn = Array.from(c.querySelectorAll("button")).find((b) => /^unfollow/i.test((b.getAttribute("aria-label") || "").trim()));
+    return {
+      idx,
+      handle: null,
+      canFollow: !!followBtn && !unfollowBtn,
+      text: (c.innerText || "").replace(/\s+/g, " ").slice(0, 220),
+    };
+  }).filter((u) => u.canFollow);
+}
+
+// Page fn (MAIN world): follow the selected LinkedIn people-search cells, paced.
+function AITHER_LI_DO_FOLLOW(plan) {
+  return new Promise(async (resolve) => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const cells = () => Array.from(document.querySelectorAll('li.entity-result, div.entity-result__content'));
+    const done = { followed: 0, errors: [] };
+    for (const idx of (plan.follow || [])) {
+      try {
+        const c = cells()[idx];
+        const btn = c && Array.from(c.querySelectorAll("button")).find((b) => /^follow/i.test((b.getAttribute("aria-label") || "").trim()));
+        if (btn) { btn.click(); done.followed++; await sleep(2500 + Math.random() * 3500); }
+      } catch (e) { done.errors.push("follow" + idx); }
+    }
+    resolve(done);
+  });
+}
+
+async function _liLoadTab(url) {
+  let tabs = await chrome.tabs.query({ url: ["*://linkedin.com/*", "*://www.linkedin.com/*"] });
+  let tab = tabs && tabs[0];
+  if (!tab) tab = await chrome.tabs.create({ url, active: false });
+  else await chrome.tabs.update(tab.id, { url });
+  await new Promise((resolve) => {
+    const to = setTimeout(resolve, 8000);
+    chrome.tabs.onUpdated.addListener(function l(id, ch) {
+      if (id === tab.id && ch.status === "complete") { clearTimeout(to); chrome.tabs.onUpdated.removeListener(l); resolve(); }
+    });
+  });
+  await new Promise((r) => setTimeout(r, 2800));
+  return tab;
+}
+
+async function liStrategy() {
+  try {
+    const s = await chrome.storage.local.get(["socialStrategy"]);
+    return (s.socialStrategy && s.socialStrategy.linkedin) || {};
+  } catch { return {}; }
+}
+async function liFollowBudget() {
+  const today = new Date().toISOString().slice(0, 10);
+  const s = await chrome.storage.local.get(["liFollowDate", "liFollowsToday", "liFollowDailyCap"]);
+  const cap = Number(s.liFollowDailyCap) || 10;
+  const used = s.liFollowDate === today ? (Number(s.liFollowsToday) || 0) : 0;
+  return { remaining: Math.max(0, cap - used), today, used };
+}
+async function liRecordFollows(n, today, used) {
+  await chrome.storage.local.set({ liFollowDate: today, liFollowsToday: used + n });
+}
+
+async function liAutopostTick() {
+  try {
+    const s = await chrome.storage.local.get(["liAutopostEnabled"]);
+    if (s.liAutopostEnabled === false) return; // kill switch (user intent only)
+    if (await liPageDriverActive()) return;     // the on-page bar has the wheel
+    const st = await liStrategy();
+    const prompt = (st.post && st.post.prompt)
+      || "Write ONE professional LinkedIn post (2-4 short lines) in Aither's voice about AI infrastructure or building autonomous systems. No hashtags. Return only the post.";
+    const text = await xComposeText(prompt);
+    if (!text) { xNotify("LinkedIn: Aither could not write a post", false); return; }
+    const tab = await _liLoadTab("https://www.linkedin.com/feed/");
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id }, world: "MAIN", func: AITHER_LI_PAGE_POSTER, args: [text],
+    });
+    if (result && result.ok) {
+      xNotify("LinkedIn posted", true);
+      await xLogActivity({ platform: "linkedin", type: "post", text: text.slice(0, 200) });
+    } else {
+      xNotify("LinkedIn post failed: " + ((result && result.reason) || "unknown"), false);
+    }
+  } catch (e) {
+    console.debug("[Awconnect] li-autopost tick failed:", e);
+  }
+}
+
+async function liEngageTick() {
+  try {
+    const s = await chrome.storage.local.get(["liEngageEnabled"]);
+    if (s.liEngageEnabled === false) return;
+    if (await liPageDriverActive()) return;
+    const tab = await _liLoadTab("https://www.linkedin.com/feed/");
+    const [{ result: feed } = {}] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id }, world: "MAIN", func: AITHER_LI_READ_FEED, args: [15],
+    });
+    if (!feed || !feed.length) return;
+    const st = await liStrategy();
+    const plan = await xEngagePlan(feed, (st.engage && st.engage.prompt) || "");
+    if (!plan) {
+      console.warn("[Awconnect] li-engage skipped: no model produced a plan "
+        + "(on-device WebGPU unavailable and fleet unreachable)");
+      return;
+    }
+    const [{ result: done } = {}] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id }, world: "MAIN", func: AITHER_LI_DO_ENGAGE, args: [plan],
+    });
+    if (done && (done.liked || done.replied)) {
+      xNotify(`LinkedIn engaged: ${done.liked} likes${done.replied ? " + reply" : ""}`, true);
+      await xLogActivity({ platform: "linkedin", type: "engage", liked: done.liked || 0, replied: done.replied ? 1 : 0 });
+    }
+  } catch (e) {
+    console.debug("[Awconnect] li-engage tick failed:", e);
+  }
+}
+
+async function liDiscoverTick() {
+  try {
+    const s = await chrome.storage.local.get(["liDiscoverEnabled", "liDiscoverTopicIdx"]);
+    if (s.liDiscoverEnabled === false) return; // kill switch
+    if (await liPageDriverActive()) return;
+    const topic = AITHER_LI_TOPICS[(Number(s.liDiscoverTopicIdx) || 0) % AITHER_LI_TOPICS.length];
+    await chrome.storage.local.set({ liDiscoverTopicIdx: ((Number(s.liDiscoverTopicIdx) || 0) + 1) % AITHER_LI_TOPICS.length });
+    const q = encodeURIComponent(topic);
+    const budget = await liFollowBudget();
+    if (budget.remaining > 0) {
+      const tab = await _liLoadTab(`https://www.linkedin.com/search/results/people/?keywords=${q}`);
+      const [{ result: users } = {}] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id }, world: "MAIN", func: AITHER_LI_READ_SEARCH_USERS, args: [6],
+      });
+      if (users && users.length) {
+        const perTick = Math.min(3, budget.remaining);
+        const plan = await xDiscoverPlan(users, perTick);
+        if (plan) {
+          const [{ result: done } = {}] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id }, world: "MAIN", func: AITHER_LI_DO_FOLLOW, args: [plan],
+          });
+          if (done && done.followed) {
+            await liRecordFollows(done.followed, budget.today, budget.used);
+            xNotify(`LinkedIn followed ${done.followed} in “${topic}”`, true);
+            await xLogActivity({ platform: "linkedin", type: "follow", count: done.followed, topic });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.debug("[Awconnect] li-discover tick failed:", e);
   }
 }
 
@@ -1107,10 +2531,19 @@ async function xDailySummary() {
   return { posts, likes, replies, follows, followers: todayF ? todayF.count : null, text };
 }
 
+// Last X daily summary, cached so a sidepanel opened by the toast click (which
+// happens AFTER the broadcast above) can still pull it. Without this, clicking
+// the "X stats" notification landed on a fresh sidepanel that had missed the
+// broadcast and had nothing to show — the panel's default Chat view.
+let _lastXDailySummary = null;
+
 async function xDailySummaryTick() {
   await xTrackFollowers();          // refresh today's follower count first
   const sum = await xDailySummary();
-  xNotify(sum.text, true);
+  _lastXDailySummary = sum;
+  // Route the click to the extension's OWN X/social surface (the side panel),
+  // not the portal dashboard — that is what the owner keeps getting dumped on.
+  xNotify(sum.text, true, chrome.runtime.getURL("sidepanel/sidepanel.html"));
   await xLogActivity({ type: "summary", detail: sum.text });
   broadcastToSidePanel({ type: "x-daily-summary", summary: sum });
 }
@@ -1151,6 +2584,93 @@ async function xSessionSync() {
     })),
   };
 
+  // AUTOMATIC — hand the cookies to the local adk-daemon (:9001). It's loopback-
+  // trusted and runs AS THE OWNER, so it seeds the fleet session with the owner's
+  // own credentials: no bearer from the extension, no download, no manual
+  // `adk x-session import`. This is the path the owner asked for — it "just works"
+  // because awdk is already running and authenticated.
+  // The daemon's agent-server port varies per `adk up` (9001, 8080, …), so probe
+  // a few with a quick health check, then POST to the live one.
+  const daemonPorts = [9001, 8080, 8090, 9000, 8188];
+  for (const p of daemonPorts) {
+    const base = `http://127.0.0.1:${p}`;
+    let alive = false;
+    try { const h = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2500) }); alive = h.ok; } catch { alive = false; }
+    if (!alive) continue;
+    try {
+      const r = await fetch(`${base}/x-session/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cookies: payload.cookies }),
+        signal: AbortSignal.timeout(120000),
+      });
+      if (r.status === 404) continue; // alive but not the adk-daemon — keep looking
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) return { ok: true, handle: d.handle, cookieCount: names.size, via: "adk-daemon" };
+      // The daemon answered but the import failed — surface that, don't fall to a download.
+      return { ok: false, error: (d.error || d.reason || `daemon HTTP ${r.status}`), via: "adk-daemon" };
+    } catch { /* timed out / refused — try the next port */ }
+  }
+
+  // Robust bootstrap fallback: write the session to a file so it can be seeded
+  // with `adk x-session import --state x_session_state.json`, which authenticates
+  // as the HOST OWNER and does NOT depend on the extension's portal identity
+  // (that varies by how the owner signed in — cloud cookie vs local vs SPA
+  // localStorage — and is why the bridge path is unreliable). MV3 service workers
+  // have no URL.createObjectURL, so use a data: URL. Cookie values live only on
+  // the user's own machine (this extension + the Downloads file).
+  async function saveStateFile() {
+    try {
+      const json = JSON.stringify({ cookies: payload.cookies, origins: [] });
+      const dataUrl = "data:application/json;base64," +
+        btoa(unescape(encodeURIComponent(json)));
+      await chrome.downloads.download({
+        url: dataUrl, filename: "x_session_state.json", saveAs: false,
+      });
+      return true;
+    } catch { return false; }
+  }
+
+  // The import endpoint authorizes the OWNER (genesis requires caller.can_execute)
+  // — attach the same portal bearer the extension uses for every other
+  // authenticated fleet call (see harUpload). WITHOUT it genesis returns
+  // 403 "Insufficient permissions" and the sync silently no-ops, which is the
+  // exact reason "nothing automates": the session never gets seeded.
+  // The cached portal bearer lives in chrome.storage.session, which Chrome WIPES
+  // on every extension reload — so right after a reload it's empty even though the
+  // owner is signed in, and the sync would falsely report "not signed in". Fall
+  // back to deriving it LIVE from the portal auth cookie (the same source
+  // resolve-identity uses), then re-cache it.
+  let bearer = await AitherPortal.getPortalBearer();
+  if (!bearer) {
+    for (const domain of ["portal.aitherium.com", "demo.aitherium.com", "aitherium.com"]) {
+      try {
+        const c = await chrome.cookies.get({ url: `https://${domain}`, name: "aither_auth_token" });
+        if (c && c.value) {
+          bearer = c.value;
+          try { await AitherPortal.setPortalBearer(bearer); } catch { /* no session storage */ }
+          break;
+        }
+      } catch { /* no cookie access for this domain */ }
+    }
+  }
+  if (!bearer) {
+    const dl = await saveStateFile();
+    return {
+      ok: false,
+      downloaded: dl,
+      error: dl
+        ? `Saved x_session_state.json to your Downloads (${names.size} cookies) — the operator seeds it with 'adk x-session import'.`
+        : "Not signed in to portal in this browser, and could not save the session file.",
+      needsManualImport: true,
+      cookieCount: names.size,
+    };
+  }
+  const authHeaders = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${bearer}`,
+  };
+
   // Prefer the Veil bridge to genesis; fall back to the node bridge. Both mount
   // /social/x/import-session once Genesis serves the route.
   const targets = [
@@ -1162,7 +2682,7 @@ async function xSessionSync() {
     try {
       const r = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(60000), // verification opens a real browser
       });
@@ -1175,16 +2695,17 @@ async function xSessionSync() {
       lastErr = e.message;
     }
   }
-  // No endpoint took it (e.g. the route is on the worker but not yet on Genesis).
-  // Hand the caller the storage_state so it can offer a local download; the
-  // operator then imports it via the proven worker path
-  // (`adk x-session import --state <file>`). Cookie values live only in this
-  // extension and the downloaded file, both on the user's own machine.
+  // The bridge didn't accept it (auth varies by how the owner signed in). Fall
+  // back to the file: `adk x-session import` seeds it with the host owner's
+  // credentials. Cookie values live only on the user's own machine.
+  const dl = await saveStateFile();
   return {
     ok: false,
-    error: lastErr,
+    downloaded: dl,
+    error: dl
+      ? `Saved x_session_state.json to your Downloads (${names.size} cookies) — the operator seeds it with 'adk x-session import'.`
+      : `Bridge failed (${lastErr}) and could not save the session file.`,
     needsManualImport: true,
-    storageState: { cookies: payload.cookies, origins: [] },
     cookieCount: names.size,
   };
 }
@@ -1263,18 +2784,39 @@ chrome.storage.onChanged.addListener((changes, area) => {
  * This injects agent-extractor.js on-demand so scans work without a page reload.
  */
 async function ensureContentScript(tabId) {
-  try {
-    // Quick probe — if the content script is already there, it responds instantly
-    await chrome.tabs.sendMessage(tabId, { action: "ping" });
-  } catch {
-    // Content script not present — inject it now
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ["content/agent-extractor.js"],
-    });
-    // Give it a moment to register its message listener
-    await new Promise((r) => setTimeout(r, 100));
+  // Probe for THIS script BY NAME, not with a generic "ping".
+  //
+  // content/text-actions.js also answers `{action:"ping"}`. So the old probe was
+  // satisfied by whichever content script happened to be loaded, concluded the
+  // extractor was already present, and skipped injecting it. Every subsequent
+  // `extract-*-context` then reached a tab with no extractor and came back as
+  // "Page extraction failed" — a message that blames the PAGE, when the real
+  // cause was that the extractor had never been injected. Themis reported
+  // exactly this on a normal reddit.com article.
+  const isExtractorLoaded = async () => {
+    try {
+      const r = await chrome.tabs.sendMessage(tabId, { action: "ping-extractor" });
+      return Boolean(r && r.script === "agent-extractor");
+    } catch {
+      return false;
+    }
+  };
+
+  if (await isExtractorLoaded()) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content/agent-extractor.js"],
+  });
+
+  // Poll for readiness rather than sleeping a fixed 100ms: on a heavy page the
+  // listener is not always registered that fast, and the fixed wait turned a
+  // merely slow page into the same misleading "extraction failed".
+  for (let i = 0; i < 20; i++) {
+    if (await isExtractorLoaded()) return;
+    await new Promise((r) => setTimeout(r, 50));
   }
+  throw new Error("extractor did not become ready after injection");
 }
 
 /**
@@ -1432,9 +2974,9 @@ async function syncRegisteredContentScripts() {
     if (wanted.length) {
       await chrome.scripting.registerContentScripts(wanted);
     }
-    console.log(`[AitherConnect] Registered content scripts: ${wanted.map((w) => w.id).join(", ") || "(none)"}`);
+    console.log(`[Awconnect] Registered content scripts: ${wanted.map((w) => w.id).join(", ") || "(none)"}`);
   } catch (e) {
-    console.warn("[AitherConnect] Content-script registration failed:", e.message);
+    console.warn("[Awconnect] Content-script registration failed:", e.message);
   }
 }
 
@@ -1447,7 +2989,7 @@ function authHeaders() {
   if (SETTINGS.apiKey) {
     h.Authorization = `Bearer ${SETTINGS.apiKey}`;
   }
-  // Project & tenant scope — propagated to AitherNode/Genesis
+  // Project & tenant scope — propagated to awnode/Genesis
   if (SETTINGS.tenantId) {
     h["X-Tenant-ID"] = SETTINGS.tenantId;
   }
@@ -1481,7 +3023,7 @@ function authHeaders() {
  * handler AND the portal's external-message handoff. First rung that
  * succeeds wins; every failure falls through, never fakes an outcome:
  *   git → { action: "open-url" } for the UI to open in a tab.
- *   1. SOVEREIGN — local AitherNode /packs/install (bundled adk packs
+ *   1. SOVEREIGN — local awnode /packs/install (bundled adk packs
  *      install fully in-browser; registry packs 404 → next rung).
  *   2. MANAGED — Genesis /v1/agent/binding/apply-pack (license-gated;
  *      403 license_required → { action: "license-required" } with the
@@ -1516,7 +3058,7 @@ async function marketplaceInstall(itemId, install) {
         };
       }
       // 404 = not a bundled pack → managed rung (expected, not an error).
-      // Remember it: adk's CLI can only install bundled packs too (D-751),
+      // Remember it: adk's CLI can only install bundled packs too,
       // so for a confirmed-non-bundled pack the command is a dead end.
       nodeSaidNotBundled = resp.status === 404;
     } catch { /* node not running / no endpoint — fall through */ }
@@ -1525,7 +3067,7 @@ async function marketplaceInstall(itemId, install) {
   const applied = await tryApplyPackManaged(itemId);
   if (applied) return applied;
   // Rung 3 — portal handoff. On the cloud/off-box tier the gateway has no
-  // apply-pack route (D-750), so rung 2 can't reach genesis directly. Rather
+  // apply-pack route, so rung 2 can't reach genesis directly. Rather
   // than dead-ending on a command, hand off to the portal, where a logged-in
   // user applies the pack to their agent with their own session (the portal
   // marketplace honors ?listing=<id>). This closes the off-box install path
@@ -1727,7 +3269,7 @@ async function bootstrapCtaAdapters() {
 // =============================================================================
 
 chrome.runtime.onInstalled.addListener(async (details) => {
-  console.log("[AitherConnect] Extension installed/updated", details && details.reason);
+  console.log("[Awconnect] Extension installed/updated", details && details.reason);
 
   // Load connection settings from storage before anything else
   await loadSettings();
@@ -1752,13 +3294,13 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       }
     }
   } catch (e) {
-    console.warn("[AitherConnect] onboard tab open failed:", e);
+    console.warn("[Awconnect] onboard tab open failed:", e);
   }
 
   // Context menus — parent menu for text actions
   chrome.contextMenus.create({
     id: "aither-parent",
-    title: "AitherConnect",
+    title: "Awconnect",
     contexts: ["selection", "page"],
   });
 
@@ -1899,25 +3441,12 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     contexts: ["selection"],
   });
 
-  // Periodic health check + tier detection
+  // Periodic health check + tier detection + decisions polling
   chrome.alarms.create("health-check", { periodInMinutes: 0.5 });
   chrome.alarms.create("tier-check", { periodInMinutes: 0.5 });
+  chrome.alarms.create("decisions-poll", { periodInMinutes: 1 });
 
-  // Autonomous X poster: on a timer, Aither writes a tweet and this posts it in
-  // the logged-in browser — no click, no fleet round-trip required. Gated by a
-  // storage flag (the kill switch) and a configurable interval.
-  chrome.storage.local.get(["xAutopostIntervalMin", "xEngageIntervalMin"], (s) => {
-    const postMins = Number(s.xAutopostIntervalMin) || 180; // ~8/day default
-    chrome.alarms.create("x-autopost", { periodInMinutes: postMins, delayInMinutes: 1 });
-    // Engagement runs more often than posting — that's where growth comes from.
-    const engMins = Number(s.xEngageIntervalMin) || 60; // hourly default
-    chrome.alarms.create("x-engage", { periodInMinutes: engMins, delayInMinutes: 3 });
-    // Discovery: search topics, follow accounts, engage beyond the home feed.
-    const discMins = Number(s.xDiscoverIntervalMin) || 150; // ~every 2.5h
-    chrome.alarms.create("x-discover", { periodInMinutes: discMins, delayInMinutes: 5 });
-    // Daily digest: roll up the day's activity + follower trend into one notice.
-    chrome.alarms.create("x-daily-summary", { periodInMinutes: 1440, delayInMinutes: 10 });
-  });
+  await ensureXAlarms();
 
   await autoDetectTier();
   await syncRegisteredContentScripts();
@@ -1925,17 +3454,32 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   await checkHealth();
   connectToGenesis();
   pullEntitlement().catch(() => {});
+  sweepInjectables().catch(() => {});
+  autoResolveIdentity("install").catch(() => {});
 });
 
 chrome.runtime.onStartup.addListener(async () => {
-  console.log("[AitherConnect] Browser started, reconnecting...");
+  console.log("[Awconnect] Browser started, reconnecting...");
   await loadSettings();
   await loadProviderConfig();
   await autoDetectTier();
   await bootstrapCtaAdapters();
+  await ensureXAlarms();
   connectToGenesis();
   checkHealth();
   pullEntitlement().catch(() => {});
+  sweepInjectables().catch(() => {});
+  autoResolveIdentity("startup").catch(() => {});
+});
+
+// Signing in at portal.aitherium.com should be enough — the extension can read
+// that cookie and never did unless a human clicked "Sign in" in the Setup tab.
+// This closes the loop: log into the portal in this browser and the workspace
+// badge fills in by itself.
+chrome.cookies.onChanged.addListener((info) => {
+  if (info.removed || info.cookie?.name !== "aither_auth_token") return;
+  if (!/(^|\.)aitherium\.com$/.test((info.cookie.domain || "").replace(/^\./, ""))) return;
+  autoResolveIdentity("portal-login").catch(() => {});
 });
 
 // Clean up connectedApps when tabs close
@@ -1964,7 +3508,7 @@ function connectToGenesis() {
     genesisSocket = new WebSocket(GENESIS_WS);
 
     genesisSocket.onopen = () => {
-      console.log("[AitherConnect] Connected to Genesis WS");
+      console.log("[Awconnect] Connected to Genesis WS");
       isConnected = true;
       updateBadge("online");
       clearTimeout(reconnectTimer);
@@ -1976,7 +3520,7 @@ function connectToGenesis() {
         const data = JSON.parse(event.data);
         handleGenesisEvent(data);
       } catch (e) {
-        console.debug("[AitherConnect] Non-JSON WS message:", event.data);
+        console.debug("[Awconnect] Non-JSON WS message:", event.data);
       }
     };
 
@@ -2024,7 +3568,7 @@ function handleGenesisEvent(data) {
         }
         await xComposeAndPost(tab);
       } catch (e) {
-        console.debug("[AitherConnect] x_post_request failed:", e);
+        console.debug("[Awconnect] x_post_request failed:", e);
       }
     })();
     return;
@@ -2094,13 +3638,34 @@ async function extractActiveTabContext(options = {}) {
     throw new Error(response?.error || "Extraction failed");
   }
 
-  // Cache it
+  // Add a compact summary for quick context (don't send all structured data by default)
+  let summary = response.context.title ? `${response.context.title} (${response.context.url})` : response.context.url;
+
+  // Append main content preview if available
+  if (response.context.structure && response.context.structure.main_content) {
+    summary += `\n\nMain content preview: ${response.context.structure.main_content.text_preview?.slice(0, 500) || "(no text)"}`;
+  }
+
+  // Append key headings
+  if (response.context.structure && response.context.structure.headings && response.context.structure.headings.length > 0) {
+    const headingTexts = response.context.structure.headings.slice(0, 5).map(h => `• ${h.text}`).join("\n");
+    summary += `\n\nPage structure:\n${headingTexts}`;
+  }
+
+  // Add agent tools hint
+  summary += `\n\n[Agent tools available: read-page, read-page-html, screenshot, find-on-page]`;
+
+  // Cache the full context but return with the compact summary attached
   agentContextCache.set(tab.id, {
     context: response.context,
     extracted_at: Date.now(),
   });
 
-  return response.context;
+  return {
+    ...response.context,
+    compact_summary: summary,
+    available_tools: ["read-page", "read-page-html", "screenshot", "find-on-page"],
+  };
 }
 
 async function extractAllTabsContext(options = {}) {
@@ -2140,6 +3705,12 @@ function sendAgentContextResponse(requestId, context, error = null) {
 // Push context to Genesis on tab change (agents always have fresh context)
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   if (!isConnected) return;
+  // Flush dwell for the page being left BEFORE anything async — an await here
+  // would attribute the old page's time to the new one.
+  try {
+    const tab = await chrome.tabs.get(activeInfo.tabId);
+    ambientSwitchTo(activeInfo.tabId, tab.url, tab.title);
+  } catch { /* tab vanished */ }
   try {
     const ctx = await extractActiveTabContext({ include_text: false });
     pushContextToGenesis(ctx, "tab_activated");
@@ -2148,6 +3719,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" || !tab.active || !isConnected) return;
+  ambientSwitchTo(tabId, tab.url, tab.title);
   // Small delay to let page finish rendering
   setTimeout(async () => {
     try {
@@ -2186,6 +3758,148 @@ async function pushContextToGenesisRest(context, trigger) {
   } catch { /* Genesis offline */ }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// AMBIENT EXPERTISE SENSOR
+// ═══════════════════════════════════════════════════════════════════════════
+// Makes the agent an expert on what you're actually reading. The pushes above
+// fire on EVERY tab switch and carry no text — good for "what is on screen
+// right now", useless as a signal of interest. This sensor instead measures
+// DWELL, and only when you have genuinely stayed on a page does it send the
+// page text to Genesis /ambient/observe, which decides whether to research it.
+//
+// Dwell is accumulated on transitions rather than by polling, because an MV3
+// service worker is suspended aggressively — a setInterval here silently stops
+// running after ~30s of idle and the sensor would look wired and be dead. The
+// alarm exists only to flush the tab you are still sitting on.
+
+const AMBIENT_ALARM = "aither-ambient-tick";
+const AMBIENT_MIN_DWELL_MS = 20_000;   // below this, don't even ask the server
+const AMBIENT_RESEND_MS = 10 * 60_000; // per-URL client-side cooldown
+const AMBIENT_MAX_TEXT = 12_000;
+
+let ambientCurrent = null;             // { tabId, url, title, since }
+const ambientDwell = new Map();        // url -> accumulated ms
+const ambientLastSent = new Map();     // url -> timestamp
+
+function ambientEnabled() {
+  // Opt-out lives with the other settings; default ON only when connected.
+  return isConnected && SETTINGS.ambientExpertise !== false;
+}
+
+/** Fold the time spent on the current page into its running total. */
+function ambientAccumulate() {
+  if (!ambientCurrent) return;
+  const elapsed = Date.now() - ambientCurrent.since;
+  if (elapsed > 0 && elapsed < 60 * 60_000) {
+    const prev = ambientDwell.get(ambientCurrent.url) || 0;
+    ambientDwell.set(ambientCurrent.url, prev + elapsed);
+  }
+  ambientCurrent.since = Date.now();
+}
+
+function ambientSwitchTo(tabId, url, title) {
+  ambientAccumulate();
+  if (!url || !/^https?:/i.test(url)) {
+    ambientCurrent = null;
+    return;
+  }
+  ambientCurrent = { tabId, url, title: title || "", since: Date.now() };
+}
+
+/** Send an observation if this page has earned one. */
+async function ambientMaybeObserve() {
+  if (!ambientEnabled() || !ambientCurrent) return;
+  ambientAccumulate();
+
+  const url = ambientCurrent.url;
+  const dwellMs = ambientDwell.get(url) || 0;
+  if (dwellMs < AMBIENT_MIN_DWELL_MS) return;
+
+  const lastSent = ambientLastSent.get(url) || 0;
+  if (Date.now() - lastSent < AMBIENT_RESEND_MS) return;
+  ambientLastSent.set(url, Date.now());
+
+  try {
+    // Text is fetched ONLY at this point — a page you glanced at never has
+    // its content read, let alone sent anywhere.
+    const ctx = await extractActiveTabContext({ include_text: true });
+    const text = (ctx && (ctx.text_content ||
+      (ctx.structure && ctx.structure.main_content &&
+        ctx.structure.main_content.text_preview))) || "";
+
+    const resp = await fetch(`${GENESIS_URL}/ambient/observe`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        surface: "browser",
+        locator: url,
+        title: (ctx && ctx.title) || ambientCurrent.title || "",
+        excerpt: text.slice(0, AMBIENT_MAX_TEXT),
+        dwell_ms: Math.round(dwellMs),
+        metadata: { site: (ctx && ctx.opengraph && ctx.opengraph["og:site_name"]) || "" },
+      }),
+    });
+
+    if (!resp.ok) {
+      console.warn(`[Awconnect] ambient observe -> HTTP ${resp.status}`);
+      return;
+    }
+    const result = await resp.json();
+    if (result.salient) {
+      console.info(`[Awconnect] ambient: researching "${url}" — ${result.reason}`);
+    }
+    ambientBroadcastBrief(url, result);
+  } catch (e) {
+    console.warn("[Awconnect] ambient observe failed:", e.message);
+  }
+}
+
+/** Tell the UI when expertise on the current page is ready. */
+function ambientBroadcastBrief(url, result) {
+  if (!result || !result.brief) return;
+  chrome.runtime.sendMessage({
+    type: "ambient-brief",
+    url,
+    topic: result.topic,
+    brief: result.brief,
+  }).catch(() => { /* no listener open — the brief is still fetchable */ });
+}
+
+/** Fetch accumulated expertise for a page (used by the command bar). */
+async function ambientFetchBrief(url) {
+  try {
+    const qs = new URLSearchParams({ locator: url, surface: "browser" });
+    const resp = await fetch(`${GENESIS_URL}/ambient/brief?${qs}`, {
+      headers: authHeaders(),
+    });
+    if (!resp.ok) return { available: false, reason: `HTTP ${resp.status}` };
+    return await resp.json();
+  } catch (e) {
+    return { available: false, reason: e.message };
+  }
+}
+
+chrome.alarms.create(AMBIENT_ALARM, { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === AMBIENT_ALARM) ambientMaybeObserve();
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (ambientCurrent && ambientCurrent.tabId === tabId) {
+    ambientAccumulate();
+    ambientCurrent = null;
+  }
+});
+
+// Leaving the browser entirely stops the clock — otherwise a page left open
+// overnight would look like the most interesting thing you have ever read.
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    ambientAccumulate();
+    ambientCurrent = null;
+  }
+});
+
 // Push to Strata for ingestion/training
 async function pushContextToStrata(context) {
   try {
@@ -2212,7 +3926,7 @@ async function pushContextToStrata(context) {
 async function mintRelayTokenBeforeConnect(workspaceId, tenantId) {
   const bearer = await AitherPortal.getPortalBearer();
   if (!bearer) {
-    console.debug("[AitherConnect] No portal token — relay auth skipped");
+    console.debug("[Awconnect] No portal token — relay auth skipped");
     return null;
   }
 
@@ -2227,7 +3941,7 @@ async function mintRelayTokenBeforeConnect(workspaceId, tenantId) {
     relayTokenExpiry = result.expires_at;
     return result.relay_token;
   } else {
-    console.warn("[AitherConnect] Relay token mint failed:", result.error);
+    console.warn("[Awconnect] Relay token mint failed:", result.error);
     return null;
   }
 }
@@ -2242,7 +3956,7 @@ function connectToRelay(nick, workspaceId, tenantId) {
   // Mint a token before opening the WS
   mintRelayTokenBeforeConnect(workspaceId, tenantId).then((token) => {
     if (!token) {
-      console.warn("[AitherConnect] Cannot connect to Relay without a token");
+      console.warn("[Awconnect] Cannot connect to Relay without a token");
       broadcastToSidePanel({ type: "relay-status", connected: false, error: "auth_required" });
       return;
     }
@@ -2253,12 +3967,18 @@ function connectToRelay(nick, workspaceId, tenantId) {
       relaySocket = new WebSocket(wsUrl);
 
       relaySocket.onopen = () => {
-        console.log("[AitherConnect] Connected to AitherRelay (authenticated)");
+        console.log("[Awconnect] Connected to AitherRelay (authenticated)");
         relayConnected = true;
-        // Join #general by default with workspace context
+        // NICK↔IDENTITY PARITY (2026-07-31): the relay is the single authority
+        // on an authenticated nick and 403s a join whose nick does not match
+        // the token identity. We mint a real token above, so sending a
+        // client-supplied nick could only ever match by luck — and the join
+        // rejection was invisible: `relayConnected` is set on socket OPEN,
+        // before the join is acknowledged, so the side panel said "connected"
+        // while the user was in no channel at all. Omit the nick and let the
+        // relay derive it from the token (same as AitherShell and awdk).
         relaySocket.send(JSON.stringify({
           type: "join",
-          nick: relayNick,
           channel: "#general",
           workspace_id: relayWorkspaceId,
           is_agent: false,
@@ -2269,18 +3989,29 @@ function connectToRelay(nick, workspaceId, tenantId) {
       relaySocket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          // Adopt the nick the RELAY assigned. Without this the side panel
+          // keeps displaying the locally-guessed nick, which is the one the
+          // server just declined to use — the user would see a name nobody
+          // else in the channel sees.
+          if (data && data.type === "join" && data.nick
+              && data.channel === "#general" && data.nick !== relayNick) {
+            relayNick = data.nick;
+            broadcastToSidePanel({
+              type: "relay-status", connected: true, nick: relayNick,
+            });
+          }
           broadcastToSidePanel({ type: "relay-message", data });
         } catch { /* ignore malformed */ }
       };
 
       relaySocket.onclose = (event) => {
-        console.log("[AitherConnect] Relay WS closed", { code: event.code, reason: event.reason });
+        console.log("[Awconnect] Relay WS closed", { code: event.code, reason: event.reason });
         relayConnected = false;
         // Close code 4401 = invalid token
         if (event.code === 4401) {
           relayToken = null;
           broadcastToSidePanel({ type: "relay-status", connected: false, error: "auth_invalid" });
-          console.warn("[AitherConnect] Relay auth token invalid (4401) — re-authentication required");
+          console.warn("[Awconnect] Relay auth token invalid (4401) — re-authentication required");
         } else {
           broadcastToSidePanel({ type: "relay-status", connected: false });
           scheduleRelayReconnect();
@@ -2288,15 +4019,15 @@ function connectToRelay(nick, workspaceId, tenantId) {
       };
 
       relaySocket.onerror = (event) => {
-        console.debug("[AitherConnect] Relay WS error:", event);
+        console.debug("[Awconnect] Relay WS error:", event);
         relayConnected = false;
       };
     } catch (e) {
-      console.debug("[AitherConnect] Could not connect to Relay:", e);
+      console.debug("[Awconnect] Could not connect to Relay:", e);
       scheduleRelayReconnect();
     }
   }).catch((e) => {
-    console.debug("[AitherConnect] Relay token mint async error:", e);
+    console.debug("[Awconnect] Relay token mint async error:", e);
     scheduleRelayReconnect();
   });
 }
@@ -2324,6 +4055,10 @@ function sendRelayMessage(data) {
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "health-check") {
     await checkHealth();
+    // Piggyback on the existing 30s cadence rather than adding another alarm.
+    // checkHealth() calls updateBadge(), so refreshing after it keeps a pending
+    // card count from being overwritten by the ambient health badge.
+    await refreshAccessRequestBadge();
   }
   if (alarm.name === "tier-check") {
     await autoDetectTier();
@@ -2340,24 +4075,143 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "x-daily-summary") {
     await xDailySummaryTick();
   }
+  if (alarm.name === "li-autopost") {
+    await liAutopostTick();
+  }
+  if (alarm.name === "li-engage") {
+    await liEngageTick();
+  }
+  if (alarm.name === "li-discover") {
+    await liDiscoverTick();
+  }
+  if (alarm.name === "decisions-poll") {
+    await decisionsPollTick();
+  }
 });
 
 // Inject the on-page growth control panel whenever an x.com tab finishes loading.
 // The panel guards against double-injection itself, so re-firing is harmless.
+/* The Living OS's own origins. Matched against the TAB URL, so a page merely LINKING to
+   aitherium.com is unaffected. Kept as one regex shared by every injection site — the
+   command bar and the overlay bridge must agree about what "the OS" is, or one of them
+   renders on top of the real dock while the other correctly stands down. */
+// The whole aitherium.com family is the OS: apex (Living Desktop) plus every
+// subdomain that serves the same Veil app — portal, demo, tunnel, veil — all
+// render the real dock. Injection on ANY of them stacked a second taskbar.
+const IS_OS_ORIGIN = /^https?:\/\/(www\.)?([a-z0-9-]+\.)*aitherium\.com(\/|$|\?|#)/;
+
 function _xInjectPanel(tabId, file) {
   chrome.scripting.executeScript({
     target: { tabId },
     files: [file],
   }).catch(() => { /* not a supported tab / no host permission yet — ignore */ });
 }
-chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
-  if (info.status !== "complete" || !tab || !tab.url) return;
-  // One command bar for every social surface (config-driven; replaces the old
-  // per-platform floating panels).
-  if (/^https:\/\/(x\.com|twitter\.com|(www\.)?linkedin\.com)\//.test(tab.url)) {
-    _xInjectPanel(tabId, "content/aither-command-bar.js");
+/** Can this tab URL host our page injections at all? */
+function _injectableUrl(url) {
+  // Only http(s) pages can host a content script; browser UI, the web stores and
+  // extension pages can't (executeScript throws there and is caught).
+  if (!url || !/^https?:\/\//.test(url)) return false;
+  if (/^https?:\/\/(chrome\.google\.com\/webstore|chromewebstore\.google\.com|microsoftedge\.microsoft\.com)/.test(url)) return false;
+  // NEVER ON THE OS ITSELF. aitherium.com IS the Living OS — it already renders the real
+  // dock, brain bar and sign-in. Injecting here gave the owner TWO taskbars stacked at the
+  // bottom of the same viewport, the extension's hand-rolled one under the real one, and
+  // the overlay bridge additionally iframed aitherium.com INTO aitherium.com. The whole
+  // point of both scripts is to bring the OS to pages that are NOT the OS.
+  if (IS_OS_ORIGIN.test(url)) return false;
+  return true;
+}
+
+/** Inject whatever the current settings call for into one tab. Both scripts
+ *  guard against double-injection themselves, so re-firing is harmless. */
+function injectInto(tabId, url) {
+  if (!_injectableUrl(url)) return;
+  // Social surfaces (x/twitter/linkedin) keep the COMMAND BAR as their driver,
+  // not the overlay. The overlay's os-ready handler removes the command bar,
+  // but on those hosts the bar is the only in-page post/engage surface and its
+  // xPageDriverAt lease suppresses the service worker's autopost — removing it
+  // would silently kill automation (the lease keeps renewing from the bar's
+  // closures even after the DOM node is gone). So the overlay serves general
+  // pages; the bar serves social pages; never both stacked.
+  let isSocial = false;
+  try { const h = new URL(url).hostname.replace(/^www\./, ""); isSocial = /(^|\.)(x\.com|twitter\.com|linkedin\.com)$/.test(h); } catch { /* unparseable */ }
+  // The REAL AitherOS (overlay iframe) is the taskbar on every NON-SOCIAL page —
+  // the owner wants the Living OS dock, not the hand-rolled bar. The command bar
+  // is the post/engage DRIVER on social surfaces only, docked above the real
+  // dock. (Re-enabled 2026-08-08 12:35 after a crash investigation: the crash
+  // was the overlay revealing the FULL opaque OS before any clip existed; the
+  // bridge now reveals only once os-regions clip it.)
+  //
+  // `&& !isSocial` is NOT redundant with the bridge's own social guard (AC011,
+  // AC009d). Two reasons the belt matters as much as the braces: the bridge is
+  // also injected from the context-menu and toggle-overlay paths that never
+  // reach this function, so its guard is the only thing standing there — and a
+  // guard that is the ONLY copy is one edit from being deleted as dead code by
+  // someone who reads this line and concludes social is already excluded here.
+  // The failure it prevents is silent: the overlay's os-ready handler removes
+  // the command bar, whose xPageDriverAt lease keeps renewing from its closures
+  // even after the DOM node is gone, so social automation stops with nothing
+  // logged and every surface still reporting enabled.
+  if (SETTINGS.osOverlayEnabled && !isSocial) _xInjectPanel(tabId, "content/aither-overlay-bridge.js");
+  if (SETTINGS.commandBarEnabled && isSocial) _xInjectPanel(tabId, "content/aither-command-bar.js");
+}
+
+/** Inject into every ALREADY-OPEN tab.
+ *
+ *  tabs.onUpdated only fires on a load, so without this every tab open at the
+ *  moment the extension installs, updates, or has its settings changed stays
+ *  bare until the user reloads it. On x.com that is not cosmetic: the bar is
+ *  the in-page driver for post/engage, so an un-swept tab is an automation
+ *  that silently never runs. */
+async function sweepInjectables() {
+  if (!SETTINGS.commandBarEnabled && !SETTINGS.osOverlayEnabled) return;
+  try {
+    const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+    for (const t of tabs) {
+      if (t.id != null) injectInto(t.id, t.url);
+    }
+  } catch (e) {
+    console.debug("[Awconnect] injectable sweep failed:", e);
   }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status !== "complete" || !tab) return;
+  // The Aither OS taskbar renders on EVERY website — the page becomes the desktop.
+  // X/LinkedIn additionally light up the social automation inside the same bar.
+  injectInto(tabId, tab.url);
 });
+
+// ─────────────────────────────────────────────────────────────────
+// DECISIONS POLLING
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Poll the harness daemon for decision counts and update the action button badge.
+ * Runs every 1 minute via chrome.alarms.
+ */
+async function decisionsPollTick() {
+  try {
+    if (!self.HarnessAuth) return;
+    const counts = await self.HarnessAuth.getDecisionCounts();
+    if (!counts || !counts.open) return;
+
+    const badgeCount = Math.max(0, counts.open);
+    if (badgeCount > 0) {
+      // Set action button badge text
+      chrome.action.setBadgeText({ text: String(badgeCount) });
+      chrome.action.setBadgeBackgroundColor({ color: '#ef4444' }); // red
+      // Broadcast to sidepanel so it can refresh its display
+      broadcastToSidePanel({
+        type: "decisions-count-update",
+        counts: counts,
+      });
+    } else {
+      chrome.action.setBadgeText({ text: '' });
+    }
+  } catch (e) {
+    console.debug("[Awconnect] decisions-poll tick failed:", e);
+  }
+}
 
 // Autonomous X post on the timer. Kill switch: chrome.storage.local
 // xAutopostEnabled (default TRUE — the owner asked for hands-off). Only posts
@@ -2365,8 +4219,10 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
 // write fresh text each time.
 async function xAutopostTick() {
   try {
+    await repairXKillSwitch();
     const s = await chrome.storage.local.get(["xAutopostEnabled"]);
-    if (s.xAutopostEnabled === false) return; // explicit kill switch
+    if (s.xAutopostEnabled === false) return; // explicit kill switch (user intent only)
+    if (await xPageDriverActive()) return;    // the on-page command bar has the wheel
     let tabs = await chrome.tabs.query({ url: ["*://x.com/*", "*://twitter.com/*"] });
     let tab = tabs && tabs[0];
     if (!tab) {
@@ -2374,7 +4230,7 @@ async function xAutopostTick() {
     }
     await xComposeAndPost(tab);
   } catch (e) {
-    console.debug("[AitherConnect] x-autopost tick failed:", e);
+    console.debug("[Awconnect] x-autopost tick failed:", e);
   }
 }
 
@@ -2458,7 +4314,15 @@ async function checkHealth() {
   });
 }
 
+// Pending A2A permission cards. These OUTRANK the health badge: a card means a
+// federated agent is blocked right now waiting on a human, which is actionable,
+// whereas "ecosystem online" is ambient. Kept in a variable so the two badge
+// writers cooperate instead of overwriting each other.
+let ACCESS_CARDS_PENDING = 0;
+let LAST_ECOSYSTEM_STATUS = "offline";
+
 function updateBadge(status) {
+  if (status) LAST_ECOSYSTEM_STATUS = status;
   const colors = {
     online: "#22c55e",
     offline: "#6b7280",
@@ -2469,8 +4333,46 @@ function updateBadge(status) {
     offline: "OFF",
     degraded: "!",
   };
-  chrome.action.setBadgeBackgroundColor({ color: colors[status] || "#6b7280" });
-  chrome.action.setBadgeText({ text: text[status] || "" });
+  if (ACCESS_CARDS_PENDING > 0) {
+    chrome.action.setBadgeBackgroundColor({ color: "#06b6d4" });
+    chrome.action.setBadgeText({ text: String(ACCESS_CARDS_PENDING) });
+    return;
+  }
+  const s = status || LAST_ECOSYSTEM_STATUS;
+  chrome.action.setBadgeBackgroundColor({ color: colors[s] || "#6b7280" });
+  chrome.action.setBadgeText({ text: text[s] || "" });
+}
+
+/** Base origin for platform API calls: the remote portal, else local Veil. */
+function accessBase() {
+  if (SETTINGS.remoteUrl) return String(SETTINGS.remoteUrl).replace(/\/+$/, "");
+  if (VEIL_URL) return VEIL_URL.replace(/\/+$/, "");
+  return `http://${LOOPBACK}:${SETTINGS.veilPort || 3000}`;
+}
+
+/** Refresh the pending-card count on the toolbar badge. */
+async function refreshAccessRequestBadge() {
+  try {
+    const res = await fetch(`${accessBase()}/api/notifications?limit=50`, {
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      // Signed out or unreachable: show NO count rather than a stale one. A
+      // number that outlives its source reads as "someone is still waiting"
+      // long after the cards were decided elsewhere.
+      ACCESS_CARDS_PENDING = 0;
+      updateBadge();
+      return;
+    }
+    const data = await res.json();
+    ACCESS_CARDS_PENDING = (data.notifications || []).filter(
+      (n) => n.access_request_id && n.status !== "action" && !n.dismissed
+    ).length;
+  } catch {
+    ACCESS_CARDS_PENDING = 0;
+  }
+  updateBadge();
 }
 
 // =============================================================================
@@ -2521,6 +4423,14 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
         await chrome.sidePanel.open({ tabId: tab.id });
       }
     }
+  }
+  if (command === "toggle-overlay" && tab?.id) {
+    // Browser-level shortcut (works even when the OS iframe has focus, unlike the
+    // page's Alt+` handler which dies the moment keystrokes go to the cross-origin
+    // frame). The overlay bridge listens for this and flips interact/pass-through.
+    try {
+      await chrome.tabs.sendMessage(tab.id, { action: "toggle-overlay-interactive" });
+    } catch { /* no bridge on this tab (not injected, or overlay removed) */ }
   }
 });
 
@@ -2601,7 +4511,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       chrome.notifications.create(`aither-kb-${Date.now()}`, {
         type: "basic",
         iconUrl: "icons/icon128.png",
-        title: "AitherConnect",
+        title: "Awconnect",
         message: `Saved to Knowledge Base (${r.chunkCount} chunk${r.chunkCount === 1 ? "" : "s"})`,
         priority: 1,
       });
@@ -2609,7 +4519,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       chrome.notifications.create(`aither-kb-${Date.now()}`, {
         type: "basic",
         iconUrl: "icons/icon128.png",
-        title: "AitherConnect",
+        title: "Awconnect",
         message: `Save failed: ${e.message}`,
         priority: 1,
       });
@@ -2692,7 +4602,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       setTimeout(() => broadcastToSidePanel(screenshotMsg), 800);
       setTimeout(() => broadcastToSidePanel(screenshotMsg), 2000);
     } catch (err) {
-      console.error("[AitherConnect] Screenshot capture failed:", err);
+      console.error("[Awconnect] Screenshot capture failed:", err);
     }
   }
 
@@ -2708,7 +4618,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     chrome.notifications.create(`aither-remember-${Date.now()}`, {
       type: "basic",
       iconUrl: "icons/icon128.png",
-      title: "AitherConnect",
+      title: "Awconnect",
       message: "Remembered and saved to Knowledge Base",
       priority: 1,
     });
@@ -2791,7 +4701,7 @@ async function harInject(tabId, redact) {
     });
     return true;
   } catch (e) {
-    console.warn("[AitherConnect] HAR inject failed:", e.message);
+    console.warn("[Awconnect] HAR inject failed:", e.message);
     return false;
   }
 }
@@ -2835,7 +4745,7 @@ function harStop() {
   const log = {
     log: {
       version: "1.2",
-      creator: { name: "AitherConnect", version: chrome.runtime.getManifest().version },
+      creator: { name: "Awconnect", version: chrome.runtime.getManifest().version },
       pages: [],
       entries: harCapture.entries,
       _aither: {
@@ -2931,6 +4841,414 @@ function visionLocalUrl(raw) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
+    // ── Room relay ──────────────────────────────────────────────────────────
+    // The side panel is a PAGE, so its fetch to the harness daemon is subject to
+    // CORS, and chrome-extension:// is not in the daemon's allowlist. That list is
+    // deliberately narrow: the daemon spawns coding agents with filesystem access,
+    // so widening it to admit every extension is the wrong trade.
+    //
+    // A service worker with host_permissions is not subject to page CORS, so the
+    // panel asks US to fetch instead. Nothing about the daemon's posture changes.
+    //
+    // Note the panel's old error branch tested `resp.status === 0` — a CORS failure
+    // REJECTS the promise and never yields a response, so that branch could not run
+    // and the real cause was invisible.
+    case "room-fetch":
+      (async () => {
+        try {
+          const resp = await fetch(message.url, {
+            method: message.method || "GET",
+            headers: message.headers || {},
+          });
+          const text = await resp.text();
+          sendResponse({ ok: resp.ok, status: resp.status, body: text });
+        } catch (e) {
+          // Name the failure. A silent one here reads as "the room is empty".
+          sendResponse({ ok: false, status: 0, error: String((e && e.message) || e) });
+        }
+      })();
+      return true;
+
+    // ── Aither-OS taskbar: chat/ask via the selected backend, backend
+    //    persistence, and open-in-tab for launcher apps that refuse to frame ──
+    case "ask-aither":
+      (async () => {
+        try { sendResponse({ text: await askAither(message.prompt, message.backend) }); }
+        catch (e) { sendResponse({ error: String((e && e.message) || e) }); }
+      })();
+      return true;
+    case "set-backend":
+      try { chrome.storage.local.set({ aitherBackend: message.backend }); } catch { /* noop */ }
+      sendResponse({ ok: true });
+      return false;
+    case "set-webml-model":
+      try { chrome.storage.local.set({ aitherWebmlModel: message.modelId }); } catch { /* noop */ }
+      sendResponse({ ok: true });
+      return false;
+    case "probe-node":
+      // Detect a local awnode / adk daemon (same ports aitherium.com's dock
+      // watches). Runs in the SW so host_permissions bypass the page's CORS.
+      (async () => {
+        for (const u of ["http://127.0.0.1:8090", "http://127.0.0.1:8000", "http://127.0.0.1:9001", "http://127.0.0.1:8080"]) {
+          try { const r = await fetch(`${u}/health`, { signal: AbortSignal.timeout(1500) }); if (r.ok) { sendResponse({ online: true, baseUrl: u }); return; } } catch { /* next */ }
+        }
+        sendResponse({ online: false });
+      })();
+      return true;
+    case "open-tab":
+      if (message.url) { try { chrome.tabs.create({ url: message.url }); } catch { /* noop */ } }
+      sendResponse({ ok: true });
+      return false;
+    case "open-options":
+      try { chrome.runtime.openOptionsPage(); } catch { /* noop */ }
+      sendResponse({ ok: true });
+      return false;
+    case "sidepanel-ready":
+      // The sidepanel just opened (often from an X-stats toast click). Hand it
+      // the last X daily summary so it can land on the Events panel showing
+      // actual stats instead of the default Chat view. `null` means no summary
+      // has run yet this SW lifetime — the panel just stays on its default.
+      sendResponse({ xDailySummary: _lastXDailySummary || null });
+      return false;
+    case "os-identity-request":
+      // The OS overlay iframe (aitherium.com/?mode=overlay) asks who is signed in.
+      // It cannot see the portal session cookie (cross-site context), so the
+      // bridge relays this here. Serve the last applied identity from settings
+      // (cheap, no network); if there is ANY credential — an API key, a cloud
+      // key, OR a portal session cookie (the common case: signed in at
+      // portal.aitherium.com) — resolve once and cache it before answering.
+      // The OLD guard only resolved on apiKey/cloudApiKey, so a cookie-only
+      // user got an empty identity, which the OS read as "signed out" and
+      // WIPED the session its native verify had just set.
+      (async () => {
+        try {
+          let identity = buildIdentityFromSettings();
+          if (!identity.verified) {
+            let hasCredential = !!(SETTINGS.apiKey || SETTINGS.cloudApiKey);
+            if (!hasCredential) {
+              for (const domain of ["portal.aitherium.com", "demo.aitherium.com", ".aitherium.com"]) {
+                try {
+                  const c = await chrome.cookies.get({ url: `https://${domain.replace(/^\./, "")}`, name: "aither_auth_token" });
+                  if (c?.value) { hasCredential = true; break; }
+                } catch { /* no cookie access */ }
+              }
+            }
+            if (hasCredential) {
+              const r = await resolveIdentity();
+              if (r && r.ok && r.identity && !r.unverified) {
+                await applyIdentity(r.identity, r.token);
+                identity = buildIdentityFromSettings();
+              }
+            }
+          }
+          // null (not an empty identity) when unresolved, so the overlay bridge
+          // skips posting and the OS keeps whatever its native verify found.
+          sendResponse({ identity: identity.verified ? identity : null });
+        } catch (e) {
+          sendResponse({ identity: null });
+        }
+      })();
+      return true;
+    case "inject-overlay":
+    case "toggle-overlay":
+      // Inject the AitherOS holographic overlay (transparent iframe of the real
+      // aitherium.com Living OS) into the calling tab. Renders once aitherium.com
+      // serves the frame-ancestors header for this extension. "toggle-overlay" is
+      // the popup/options alias (ported from the origin lineage 2026-08-09).
+      (async () => {
+        try {
+          // The popup/options send from an extension page, so sender.tab is
+          // undefined there — resolve the active tab as the target in that case.
+          let tid = sender && sender.tab && sender.tab.id;
+          if (tid == null) {
+            const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+            tid = active && active.id;
+          }
+          if (tid == null) { sendResponse({ ok: false, error: "no active tab" }); return; }
+          await chrome.scripting.executeScript({ target: { tabId: tid }, files: ["content/aither-overlay-bridge.js"] });
+          sendResponse({ ok: true });
+        } catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+      })();
+      return true;
+    case "fleet-sync":
+      // The Living OS's PIM sync seam (notes → AitherOne, events → Chronos). The static
+      // apex cannot run its /api routes, so the OS posts sync ops through portal-bridge
+      // and this fetches the fleet-served portal — which DOES run those routes — with the
+      // user's session cookie (host permission covers it; no CORS wall in a background
+      // fetch). EXACT op → {method, path} allowlist: a caller can never name a path.
+      // Failures return verbatim (owner rule: no silent fallbacks) — a down fleet is a
+      // loud {ok:false}, never a cheerful no-op. (Ported from the origin lineage.)
+      (async () => {
+        const FLEET_SYNC_OPS = {
+          "notes-list":   { method: "GET",  path: "/api/platform/one/notes" },
+          "notes-create": { method: "POST", path: "/api/platform/one/notes" },
+          "notes-update": { method: "PUT",  path: "/api/platform/one/notes" },
+          "event-create": { method: "POST", path: "/api/chronos/v1/calendar/events" },
+        };
+        const op = FLEET_SYNC_OPS[message.op];
+        if (!op) { sendResponse({ ok: false, error: `unknown fleet-sync op: ${String(message.op)}` }); return; }
+        const portal = (SETTINGS.portalUrl || "https://portal.aitherium.com").replace(/\/+$/, "");
+        try {
+          const init = {
+            method: op.method,
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(30000),
+          };
+          if (op.method !== "GET" && message.body !== undefined) init.body = JSON.stringify(message.body);
+          const res = await fetch(`${portal}${op.path}`, init);
+          const json = await res.json().catch(() => null);
+          sendResponse({ ok: res.ok, status: res.status, json });
+        } catch (e) {
+          sendResponse({ ok: false, status: 0, error: `fleet unreachable: ${String((e && e.message) || e)}` });
+        }
+      })();
+      return true;
+    case "daemon-onboard":
+      // Proxy onboarding requests to the local adk-daemon (port probe + request).
+      // EXACT allowlist (not a prefix) so this can never proxy an arbitrary daemon path.
+      (async () => {
+        const { method, path } = message;
+        const ALLOWED = ["/onboard/status", "/onboard/sync", "/onboard/enroll"];
+        if (!ALLOWED.includes(path)) {
+          sendResponse({ ok: false, error: "invalid path" });
+          return;
+        }
+        const ports = ["http://127.0.0.1:9001", "http://127.0.0.1:8080", "http://127.0.0.1:8090", "http://127.0.0.1:9000", "http://127.0.0.1:8188"];
+        for (const base of ports) {
+          try {
+            // Quick health check (2.5s timeout)
+            const healthRes = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2500) });
+            if (!healthRes.ok) continue;
+            // Found it — make the actual request (120s timeout for enroll which is slow)
+            const res = await fetch(`${base}${path}`, {
+              method: method || "GET",
+              headers: { "Content-Type": "application/json" },
+              body: method === "POST" ? JSON.stringify({}) : undefined,
+              signal: AbortSignal.timeout(120000),
+            });
+            if (res.status === 404) continue; // next port
+            const data = await res.json();
+            sendResponse({ ok: res.ok, status: res.status, data });
+            return;
+          } catch (e) {
+            // Continue to next port
+          }
+        }
+        sendResponse({ ok: false, error: "no local daemon (run: adk up)" });
+      })();
+      return true;
+    case "daemon-call":
+      // The OS overlay calling this machine's local brain: adk / awnode /
+      // a bare llama-server. Relayed HERE and nowhere else, for one reason —
+      // the daemon's CORS allowlist deliberately does not admit arbitrary
+      // origins (it spawns coding agents with filesystem access), and a service
+      // worker with host_permissions is not subject to page CORS or to Chrome's
+      // Local Network Access gate. The overlay iframe is a third-party frame
+      // and loses on both counts, which is why Veil's own use-local-node
+      // reports "no node" in the overlay while a node is running.
+      //
+      // EXACT path allowlist, never a prefix: a prefix on a loopback proxy is
+      // an SSRF surface pointed at the owner's own machine, and `/v1/*` would
+      // admit whatever the daemon adds next without anyone re-reading this.
+      // Method is pinned per path too — a GET-only route reached by POST is a
+      // different operation.
+      (async () => {
+        const ALLOWED = {
+          "GET /health": true,           // liveness
+          "GET /info": true,             // which agent/model is loaded
+          "GET /v1/models": true,        // the served menu (NOT liveness — a
+                                         // model listed here can still hang)
+          "POST /v1/chat/completions": true,  // local inference
+          "GET /tools": true,            // what this machine can do
+          "POST /tools/call": true,      // do it
+        };
+        const method = String(message.method || "GET").toUpperCase();
+        const path = String(message.path || "");
+        if (!ALLOWED[`${method} ${path}`]) {
+          sendResponse({ ok: false, error: `path not allowed: ${method} ${path}` });
+          return;
+        }
+        // Same probe order the overlay's node discovery uses, so "online" and
+        // "callable" can never disagree about WHICH node they mean.
+        const bases = ["http://127.0.0.1:8090", "http://127.0.0.1:8000", "http://127.0.0.1:9001", "http://127.0.0.1:8080"];
+        for (const base of bases) {
+          try {
+            const health = await fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) });
+            if (!health.ok) continue;
+            const res = await fetch(`${base}${path}`, {
+              method,
+              headers: { "Content-Type": "application/json" },
+              body: method === "POST" ? JSON.stringify(message.body || {}) : undefined,
+              // Local generation on a laptop CPU is genuinely slow; a short
+              // timeout here reads to the user as "the local model is broken".
+              signal: AbortSignal.timeout(method === "POST" ? 180000 : 15000),
+            });
+            if (res.status === 404) continue;   // alive, but not the node serving this route
+            const data = await res.json().catch(() => null);
+            sendResponse({ ok: res.ok, status: res.status, data, baseUrl: base });
+            return;
+          } catch (e) {
+            // Name the last failure rather than collapsing every cause into
+            // "no daemon" — a node that is UP but timed out mid-generation is a
+            // different problem from one that was never running.
+            var lastErr = String((e && e.message) || e);   // eslint-disable-line no-var
+          }
+        }
+        sendResponse({ ok: false, error: lastErr ? `local node unreachable: ${lastErr}` : "no local node (run: adk up)" });
+      })();
+      return true;
+    case "site-adapter":
+      // Serve the declarative adapter for a host to the overlay bridge.
+      //
+      // Read HERE and not in the page, deliberately. Content scripts can only
+      // fetch chrome-extension:// resources that `web_accessible_resources`
+      // exposes to that origin, and widening that to every site would publish
+      // our adapter files -- selectors, action names, session notes -- to any
+      // page that cares to look. The service worker can always read its own
+      // package, so the data reaches the overlay without becoming public.
+      (async () => {
+        try {
+          const host = String(message.host || "").replace(/^www\./, "");
+          if (!host) { sendResponse({ ok: false, error: "no host" }); return; }
+          const idx = await (await fetch(chrome.runtime.getURL("adapters/index.json"))).json();
+          for (const id of (idx.adapters || [])) {
+            const a = await (await fetch(chrome.runtime.getURL(`adapters/${id}.json`))).json();
+            const hit = (a.match || []).some((pat) => {
+              // Glob -> regex on the HOST+PATH, anchored. A substring test would
+              // let evil-discord.com.attacker.net match the discord adapter.
+              const rx = new RegExp("^" + pat.split("*").map((lit) => lit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
+              return rx.test(message.url || `https://${host}/`);
+            });
+            if (hit) { sendResponse({ ok: true, adapter: a }); return; }
+          }
+          sendResponse({ ok: true, adapter: null });   // no adapter is a normal answer
+        } catch (e) {
+          sendResponse({ ok: false, error: String((e && e.message) || e) });
+        }
+      })();
+      return true;
+    case "os-compose":
+      // On-device composition for the overlay, through the SAME Bonsai ladder the
+      // X automation uses (webmlComposeText): requested model first, then DOWN
+      // through the lighter ready models, so a GPU that merely cannot hold 27B
+      // still composes instead of silently reporting "no brain".
+      //
+      // Distinguishes "no GPU here" from "the model failed" -- the caller needs
+      // that difference to decide between falling back to the fleet and telling
+      // the user their machine cannot do this. A bare null conflates them, which
+      // is how on-device composition silently stopped once before.
+      (async () => {
+        try {
+          const caps = await getWebMLCapabilities().catch(() => ({ webgpu: false }));
+          if (!caps || !caps.webgpu) {
+            sendResponse({ ok: false, reason: "no-webgpu", error: "this browser/GPU cannot run the on-device brain" });
+            return;
+          }
+          const text = await webmlComposeText(String(message.prompt || ""), {
+            maxTokens: Math.min(Number(message.maxTokens) || 200, 512),
+            temperature: typeof message.temperature === "number" ? message.temperature : 0.5,
+          });
+          if (!text) { sendResponse({ ok: false, reason: "model-failed", error: "every on-device model in the ladder failed to produce text" }); return; }
+          sendResponse({ ok: true, text });
+        } catch (e) {
+          sendResponse({ ok: false, reason: "error", error: String((e && e.message) || e) });
+        }
+      })();
+      return true;
+    case "inject-machine-panel":
+      // Inject the machine onboarding console panel into the calling tab.
+      (async () => {
+        try {
+          const tid = sender && sender.tab && sender.tab.id;
+          if (tid == null) { sendResponse({ ok: false, error: "no tab" }); return; }
+          await chrome.scripting.executeScript({ target: { tabId: tid }, files: ["content/aither-machine-panel.js"] });
+          // Trigger the panel to open
+          await chrome.scripting.executeScript({
+            target: { tabId: tid },
+            function: () => {
+              if (window.__openMachinePanel) {
+                window.__openMachinePanel();
+              }
+            },
+          });
+          sendResponse({ ok: true });
+        } catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+      })();
+      return true;
+    case "daemon-backup":
+      // Proxy backup requests to the local adk-daemon (port probe + request).
+      // EXACT allowlist (not a prefix) so this can never proxy an arbitrary daemon path.
+      (async () => {
+        const { method, path, body } = message;
+        const ALLOWED = ["/backup/config", "/backup/status", "/backup/now", "/backup/list", "/backup/restore"];
+        if (!ALLOWED.includes(path)) {
+          sendResponse({ ok: false, error: "invalid path" });
+          return;
+        }
+        const ports = ["http://127.0.0.1:9001", "http://127.0.0.1:8080", "http://127.0.0.1:8090", "http://127.0.0.1:9000", "http://127.0.0.1:8188"];
+        for (const base of ports) {
+          try {
+            // Quick health check (2.5s timeout)
+            const healthRes = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2500) });
+            if (!healthRes.ok) continue;
+            // Found it — make the actual request (120s timeout for backup which is slow)
+            const res = await fetch(`${base}${path}`, {
+              method: method || "GET",
+              headers: { "Content-Type": "application/json" },
+              body: method === "POST" ? JSON.stringify(body || {}) : undefined,
+              signal: AbortSignal.timeout(120000),
+            });
+            if (res.status === 404) continue; // next port
+            const data = await res.json();
+            sendResponse({ ok: res.ok, status: res.status, data });
+            return;
+          } catch (e) {
+            // Continue to next port
+          }
+        }
+        sendResponse({ ok: false, error: "no local daemon (run: adk up)" });
+      })();
+      return true;
+    case "inject-backups-panel":
+      // Inject the zero-knowledge backups panel into the calling tab.
+      (async () => {
+        try {
+          const tid = sender && sender.tab && sender.tab.id;
+          if (tid == null) { sendResponse({ ok: false, error: "no tab" }); return; }
+          await chrome.scripting.executeScript({ target: { tabId: tid }, files: ["content/aither-backups-panel.js"] });
+          // Trigger the panel to open
+          await chrome.scripting.executeScript({
+            target: { tabId: tid },
+            function: () => {
+              if (window.__openBackupsPanel) {
+                window.__openBackupsPanel();
+              }
+            },
+          });
+          sendResponse({ ok: true });
+        } catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+      })();
+      return true;
+    case "open-sidepanel": {
+      // Open Edge's NATIVE side panel — the real Awconnect chat/relay client,
+      // fully functional. Called synchronously so the content-script click's user
+      // gesture is preserved (sidePanel.open requires one).
+      const wid = sender && sender.tab && sender.tab.windowId;
+      const tid = sender && sender.tab && sender.tab.id;
+      // Edge often drops the user-gesture across the message hop, so sidePanel.open
+      // rejects. Fall back to opening the SAME chat client in a tab — always works.
+      const openTab = () => { try { chrome.tabs.create({ url: chrome.runtime.getURL("sidepanel/sidepanel.html") }); } catch { /* noop */ } };
+      let opening;
+      try {
+        opening = wid != null ? chrome.sidePanel.open({ windowId: wid })
+          : (tid != null ? chrome.sidePanel.open({ tabId: tid }) : Promise.reject(new Error("no tab")));
+      } catch (e) { opening = Promise.reject(e); }
+      Promise.resolve(opening).then(() => sendResponse({ ok: true, via: "sidepanel" }))
+        .catch(() => { openTab(); sendResponse({ ok: true, via: "tab" }); });
+      return true;
+    }
+
     // ── HAR capture: start / stop / status / upload / stream entry ──────
     case "har-capture-start":
       (async () => {
@@ -3047,7 +5365,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try {
           const which = message.which;
           if (which === "post") await xAutopostTick();
-          else if (which === "engage") await xEngageTick();
+          else if (which === "engage") await xEngageTick(message.force);
           else if (which === "discover") await xDiscoverTick();
           else if (which === "summary") await xDailySummaryTick();
           sendResponse({ ok: true, ran: which });
@@ -3098,6 +5416,216 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
           sendResponse({ ok: true, outputs });
         } catch (e) { sendResponse({ ok: false, error: e.message }); }
+      })();
+      return true;
+
+    // ════════════════════════════════════════════════════════════════════
+    // AGENT TOOLS — Page context extraction for in-conversation use
+    // ════════════════════════════════════════════════════════════════════
+    // These tools let the agent read and search the active tab mid-conversation.
+    // They always return explicit errors when the page is unscannable.
+
+    case "read-page":
+      // Get structured page summary (title, URL, headings, text preview, links)
+      (async () => {
+        try {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!tab?.id) {
+            sendResponse({ success: false, error: "No active tab available" });
+            return;
+          }
+
+          // Check if page is unscannable
+          if (!tab.url || /^(chrome|edge|extension):\/\//.test(tab.url)) {
+            sendResponse({
+              success: false,
+              error: `Cannot read this page: ${tab.url}. Chrome/extension pages are not scannable.`,
+            });
+            return;
+          }
+
+          if (tab.url.endsWith(".pdf")) {
+            sendResponse({
+              success: false,
+              error: `Cannot read PDF pages. Use your PDF reader's text extraction instead.`,
+            });
+            return;
+          }
+
+          // Ensure content script is loaded
+          await ensureContentScript(tab.id);
+
+          // Extract summary from page
+          const response = await chrome.tabs.sendMessage(tab.id, {
+            action: "read-page-summary",
+          });
+
+          if (!response?.success) {
+            sendResponse({
+              success: false,
+              error: response?.error || "Page extraction failed",
+            });
+            return;
+          }
+
+          sendResponse({ success: true, summary: response.summary });
+        } catch (e) {
+          sendResponse({
+            success: false,
+            error: `Could not read page: ${e.message}`,
+          });
+        }
+      })();
+      return true;
+
+    case "read-page-html":
+      // Get raw HTML for a CSS selector or the document
+      (async () => {
+        try {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!tab?.id) {
+            sendResponse({ success: false, error: "No active tab available" });
+            return;
+          }
+
+          // Check if page is unscannable
+          if (!tab.url || /^(chrome|edge|extension):\/\//.test(tab.url)) {
+            sendResponse({
+              success: false,
+              error: `Cannot read this page: ${tab.url}. Chrome/extension pages are not scannable.`,
+            });
+            return;
+          }
+
+          if (tab.url.endsWith(".pdf")) {
+            sendResponse({
+              success: false,
+              error: `Cannot read PDF pages. Use your PDF reader's text extraction instead.`,
+            });
+            return;
+          }
+
+          // Ensure content script is loaded
+          await ensureContentScript(tab.id);
+
+          // Extract HTML
+          const response = await chrome.tabs.sendMessage(tab.id, {
+            action: "read-page-html",
+            selector: message.selector || null,
+            max_chars: message.max_chars || 50000,
+          });
+
+          if (!response?.success) {
+            sendResponse({
+              success: false,
+              error: response?.error || "HTML extraction failed",
+            });
+            return;
+          }
+
+          sendResponse(response);
+        } catch (e) {
+          sendResponse({
+            success: false,
+            error: `Could not extract HTML: ${e.message}`,
+          });
+        }
+      })();
+      return true;
+
+    case "screenshot":
+      // Capture a screenshot of the active tab for vision analysis
+      (async () => {
+        try {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!tab?.id) {
+            sendResponse({ success: false, error: "No active tab available" });
+            return;
+          }
+
+          // Check if page is unscannable
+          if (!tab.url || /^(chrome|edge|extension):\/\//.test(tab.url)) {
+            sendResponse({
+              success: false,
+              error: `Cannot screenshot this page: ${tab.url}. Chrome/extension pages are not scannable.`,
+            });
+            return;
+          }
+
+          // PDF: we can screenshot but it will be the PDF viewer
+          const [dataUrl, windowInfo] = await Promise.all([
+            chrome.tabs.captureVisibleTab(tab.windowId, { format: "png", quality: 90 }),
+            chrome.windows.get(tab.windowId),
+          ]);
+
+          sendResponse({
+            success: true,
+            screenshot: dataUrl,
+            url: tab.url,
+            title: tab.title,
+            width: windowInfo.width,
+            height: windowInfo.height,
+          });
+        } catch (e) {
+          sendResponse({
+            success: false,
+            error: `Could not capture screenshot: ${e.message}`,
+          });
+        }
+      })();
+      return true;
+
+    case "find-on-page":
+      // Search page for text or elements matching a query
+      (async () => {
+        try {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!tab?.id) {
+            sendResponse({ success: false, error: "No active tab available" });
+            return;
+          }
+
+          // Check if page is unscannable
+          if (!tab.url || /^(chrome|edge|extension):\/\//.test(tab.url)) {
+            sendResponse({
+              success: false,
+              error: `Cannot search this page: ${tab.url}. Chrome/extension pages are not scannable.`,
+            });
+            return;
+          }
+
+          if (tab.url.endsWith(".pdf")) {
+            sendResponse({
+              success: false,
+              error: `Cannot search PDF pages. Use your PDF reader's search instead.`,
+            });
+            return;
+          }
+
+          // Ensure content script is loaded
+          await ensureContentScript(tab.id);
+
+          const response = await chrome.tabs.sendMessage(tab.id, {
+            action: "find-on-page",
+            query: message.query,
+            type: message.type || "text",
+          });
+
+          if (!response?.success) {
+            sendResponse({
+              success: false,
+              error: response?.error || "Search failed",
+            });
+            return;
+          }
+
+          sendResponse(response);
+        } catch (e) {
+          sendResponse({
+            success: false,
+            error: `Could not search page: ${e.message}`,
+          });
+        }
       })();
       return true;
 
@@ -3314,7 +5842,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   }
                 }
               } catch (e) {
-                console.debug("[AitherConnect] KB retrieval skipped:", e.message);
+                console.debug("[Awconnect] KB retrieval skipped:", e.message);
               }
             }
             messages.push({ role: "user", content: message.text });
@@ -3378,7 +5906,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           broadcastToSidePanel({ type: "chat-event", event: "pipeline", data: {
             stage: "stream",
             message: tier === "provider" ? `Connecting to ${modelLabel}...`
-              : `Connecting to ${tier === "node-only" ? "AitherNode" : "Cloud Gateway"}...`,
+              : `Connecting to ${tier === "node-only" ? "awnode" : "Cloud Gateway"}...`,
           }});
 
           try {
@@ -3411,7 +5939,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               // On auth failure or server error, re-detect tier — genesis may be available now
               let _redetectedTier = tier;
               if (resp.status === 401 || resp.status === 403 || resp.status >= 500) {
-                console.debug(`[AitherConnect] ${tier} returned ${resp.status}, re-detecting tier...`);
+                console.debug(`[Awconnect] ${tier} returned ${resp.status}, re-detecting tier...`);
                 await autoDetectTier();
                 _redetectedTier = DETECTED_TIER;
               }
@@ -3466,7 +5994,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             // Update local session_id if server returned a different one
             if (returnedSessionId && returnedSessionId !== serverSessionId) {
               await chrome.storage.local.set({ "aither_server_session_id": returnedSessionId });
-              console.log("[AitherConnect] Updated session ID to:", returnedSessionId);
+              console.log("[Awconnect] Updated session ID to:", returnedSessionId);
               // Broadcast to sidepanel so UI can update
               broadcastToSidePanel({ type: "session-updated", session_id: returnedSessionId });
             }
@@ -3480,7 +6008,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }});
             return;
           } catch (err) {
-            console.debug(`[AitherConnect] ${tier} chat failed:`, err.message);
+            console.debug(`[Awconnect] ${tier} chat failed:`, err.message);
             if (tier === "provider") {
               // 'Failed to fetch' from a provider = CORS/permission/network —
               // point at the likely fixes instead of re-detecting tiers.
@@ -3568,7 +6096,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             // Update local session_id if server returned a different one
             if (returnedSessionId && returnedSessionId !== serverSessionId) {
               await chrome.storage.local.set({ "aither_server_session_id": returnedSessionId });
-              console.log("[AitherConnect] Updated session ID to:", returnedSessionId);
+              console.log("[Awconnect] Updated session ID to:", returnedSessionId);
               // Broadcast to sidepanel so UI can update
               broadcastToSidePanel({ type: "session-updated", session_id: returnedSessionId });
             }
@@ -3587,10 +6115,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           // "SSE unavailable" (this exact silence hid a Veil middleware bug).
           const errBody = await resp.text().catch(() => "");
           agentFallbackReason = `/agent ${resp.status}: ${errBody.slice(0, 160) || "non-SSE response"}`;
-          console.warn(`[AitherConnect] ${agentFallbackReason} — falling back to /chat`);
+          console.warn(`[Awconnect] ${agentFallbackReason} — falling back to /chat`);
         } catch (streamErr) {
           agentFallbackReason = `/agent failed: ${streamErr.message}`;
-          console.debug("[AitherConnect] /agent stream failed, falling back:", streamErr.message);
+          console.debug("[Awconnect] /agent stream failed, falling back:", streamErr.message);
           // If streaming was started, tell the sidepanel it errored
           if (streamingStarted) {
             broadcastToSidePanel({ type: "chat-event", event: "error", data: {
@@ -3665,7 +6193,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // ── Harvest data from content scripts ───────────────────────────
     case "HARVEST_DATA":
-      console.log(`[AitherConnect] Harvest from ${sender.url}`);
+      console.log(`[Awconnect] Harvest from ${sender.url}`);
       knowledgeIngest({
         content: message.content,
         source: sender.url || message.source || "generic_web",
@@ -3679,7 +6207,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     // ── AitherBrowser — host-side Playwright capture/crawl ─────────
-    // Rides the AitherNode proxy plane in node tier, the Veil bridge in
+    // Rides the awnode proxy plane in node tier, the Veil bridge in
     // genesis tier. Unavailable in cloud/provider tiers (BROWSER_URL = "").
     case "browser-status":
       (async () => {
@@ -3773,7 +6301,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           // my knowledge base" — the entire reason to crawl server-side rather
           // than open 25 tabs — was left for the caller to loop, and no caller
           // did. Each page is its own KB entry so search returns the right page,
-          // not one giant blob. Loop lives in shared/aitherbrowser.js (D-922).
+          // not one giant blob. Loop lives in shared/aitherbrowser.js.
           const ingestReport = message.ingest
             ? await AitherBrowserBridge.ingestPages(data.pages, knowledgeIngest, {
                 collection: message.collection,
@@ -4195,6 +6723,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch((e) => sendResponse({ success: false, error: e.message }));
       return true;
 
+    // ── Ambient Expertise ──────────────────────────────────────────
+    // "What does the agent already know about this page?"
+    case "ambient-brief":
+      (async () => {
+        const url = message.url || (ambientCurrent && ambientCurrent.url) || "";
+        if (!url) {
+          sendResponse({ available: false, reason: "no active page" });
+          return;
+        }
+        sendResponse(await ambientFetchBrief(url));
+      })();
+      return true;
+
+    // Force an observation now instead of waiting for dwell to accrue.
+    case "ambient-learn-this":
+      (async () => {
+        ambientLastSent.delete((ambientCurrent && ambientCurrent.url) || "");
+        if (ambientCurrent) {
+          ambientDwell.set(ambientCurrent.url, AMBIENT_MIN_DWELL_MS);
+        }
+        await ambientMaybeObserve();
+        sendResponse({ success: true });
+      })();
+      return true;
+
     // ── MCP Tool Discovery ─────────────────────────────────────────
     case "list-tools":
       (async () => {
@@ -4228,18 +6781,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         };
 
         const tier = DETECTED_TIER;
-        // AitherNode is the always-on host service that Claude Code + aither-adk
+        // awnode is the always-on host service that Claude Code + awdk
         // also use. When it's reachable, list ITS tools first (one source of
         // truth) — regardless of tier — via /mcp/tools on the persistent server.
         const nodeBase = (tier === "node-only" && TIER_URLS.nodeUrl)
           ? TIER_URLS.nodeUrl
           : `http://${LOOPBACK}:${SETTINGS.nodePort || 8090}`;
         try {
-          const result = await fetchJson(`${nodeBase}/mcp/tools`, {}, 20000, "AitherNode");
+          const result = await fetchJson(`${nodeBase}/mcp/tools`, {}, 20000, "awnode");
           if (result.ok) {
             const tools = mapTools(result.data.tools);
             if (tools.length) {
-              sendResponse({ ok: true, tools, tier: "node", source: "aithernode" });
+              sendResponse({ ok: true, tools, tier: "node", source: "awnode" });
               return;
             }
             // node up but zero tools — fall through to the configured MCP path below
@@ -4303,7 +6856,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             // node-only tier but the node had 0 tools, or an unknown tier
             sendResponse({
               ok: false, tools: [],
-              error: "AitherNode is running but exposed no tools — start a backend "
+              error: "awnode is running but exposed no tools — start a backend "
                 + "(Genesis, Ollama, or Bonsai) so platform tools become available.",
             });
             return;
@@ -4389,7 +6942,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // ── Marketplace: install a pack ──────────────────────────────────
     // Resolution ladder (first rung that succeeds wins, fail-closed):
     //   git → return the URL for the UI to open in a tab.
-    //   1. SOVEREIGN: local AitherNode /packs/install (bundled adk packs
+    //   1. SOVEREIGN: local awnode /packs/install (bundled adk packs
     //      install fully in-browser; 404 for registry packs → next rung).
     //   2. MANAGED: Genesis POST /v1/agent/binding/apply-pack — applies the
     //      pack to the caller's BOUND agent (skill overlay / tool grant /
@@ -4534,7 +7087,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // ── Open dashboard ──────────────────────────────────────────────
     case "open-dashboard":
-      chrome.tabs.create({ url: VEIL_URL });
+      // The DASHBOARD, not the Veil root. These two cases were byte-identical, so
+      // the toolbar's "Veil" and "Dashboard" buttons opened the same page and one
+      // of them was decoration. /dashboard is a real route (app/dashboard/page.tsx)
+      // and is what the extension's own app list points "dashboard" at.
+      chrome.tabs.create({ url: `${VEIL_URL.replace(/\/+$/, "")}/dashboard` });
       sendResponse({ ok: true });
       break;
 
@@ -4644,6 +7201,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })();
       return true;
 
+    // ── Access requests (A2A permission cards) ──────────────────────
+    // Federated agents that get refused raise a permission card and stay
+    // blocked until a human decides. The card lives on the platform, and the
+    // portal tray + `adk approvals` resolve the SAME ones — deciding here
+    // clears them there.
+    //
+    // Auth is the operator's own portal SESSION (credentials: "include"), NOT
+    // a key: the fleet internal key gates the gateway routes and must never
+    // ship inside an extension. Veil attaches it server-side after checking
+    // the session is admin.
+    case "get-access-requests":
+      (async () => {
+        try {
+          const res = await fetch(`${accessBase()}/api/notifications?limit=50`, {
+            credentials: "include",
+            cache: "no-store",
+          });
+          if (!res.ok) {
+            sendResponse({ ok: false, status: res.status, error: `HTTP ${res.status}` });
+            return;
+          }
+          const data = await res.json();
+          // Only cards — every other notification is an FYI, not a decision.
+          const cards = (data.notifications || []).filter(
+            (n) => n.access_request_id && n.status !== "action" && !n.dismissed
+          );
+          sendResponse({ ok: true, cards, authed: data.auth !== false });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e && e.message || e) });
+        }
+      })();
+      return true;
+
+    case "decide-access-request":
+      (async () => {
+        try {
+          const res = await fetch(
+            `${accessBase()}/api/notifications/${encodeURIComponent(msg.id)}/action`,
+            {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: msg.decision }),
+            }
+          );
+          const data = await res.json().catch(() => null);
+          // Surface WHY on refusal. A 403 (not the owner) and a 409 (already
+          // decided) are answers, not outages — reporting a generic failure
+          // would send the operator chasing a broken service.
+          if (!res.ok) {
+            const detail = (data && (data.detail || data.error)) || `HTTP ${res.status}`;
+            sendResponse({
+              ok: false,
+              status: res.status,
+              error: typeof detail === "string" ? detail : JSON.stringify(detail),
+            });
+            return;
+          }
+          sendResponse({ ok: true, result: data || {} });
+          refreshAccessRequestBadge();
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e && e.message || e) });
+        }
+      })();
+      return true;
+
     // ── Ecosystem status (detailed) ─────────────────────────────────
     case "get-ecosystem-status":
       (async () => {
@@ -4685,7 +7308,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       (async () => {
         const checks = [
           { id: "genesis",  name: "Genesis",              url: `${GENESIS_URL}/health` },
-          { id: "node",     name: "AitherNode",           url: `${NODE_URL}/health` },
+          { id: "node",     name: "awnode",           url: `${NODE_URL}/health` },
           { id: "veil",     name: "AitherVeil",           url: `${VEIL_URL}/api/health` },
           { id: "lyra",     name: "LyraWiki",             url: `${LYRAWIKI_URL}/health` },
           { id: "pulse",    name: "Pulse",                url: `${PULSE_URL}/health` },
@@ -4695,7 +7318,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           { id: "search",   name: "AitherSearch",         url: `${SEARCH_URL}/health` },
           { id: "browser",  name: "AitherBrowser",        url: `${BROWSER_URL}/health` },
           { id: "bonsai",   name: "Bonsai-27B (local)",   url: `${NODE_URL || `http://${LOOPBACK}:` + (SETTINGS.nodePort || 8090)}/proxy/bonsai/health` },
-          { id: "ollama",   name: "Ollama",               url: `http://${LOOPBACK}:11434/api/tags` },
+          // No Ollama row: this platform deploys llama.cpp (the Bonsai lanes,
+          // probed above via the node proxy) + vLLM/MicroScheduler — Ollama is
+          // not part of the stack, and a permanent red "unreachable" row for
+          // software we never ship read as a fleet outage (owner, 2026-08-09).
+          // BYO Ollama users still get it probed IF they set a base URL in
+          // options (kept optional: refused = "not installed", gray).
+          ...(SETTINGS.ollamaUrl
+            ? [{ id: "ollama", name: "Ollama (BYO)", url: `${String(SETTINGS.ollamaUrl).replace(/\/+$/, "")}/api/tags`, optional: true }]
+            : []),
           // Ride the DETECTED bridge, not a hardcoded :3000 — on this fleet the
           // bridge is the LB on 3080 and the pinned port made vLLM read "down"
           // while MicroScheduler was serving normally.
@@ -4767,6 +7398,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   detail = d.version || d.status || d.model_count || "";
                 } catch { /* not JSON */ }
               }
+              // A 404 from the BRIDGE is the bridge saying "I have no route for
+              // that name" — a wiring gap to fix in Veil, not a dead service.
+              // Rendering it as an error made a missing probe route read as an
+              // outage (2026-08-09).
+              if (resp.status === 404 && svc.url.includes("/api/bridge/")) {
+                return { ...svc, status: "n/a", detail: "no bridge probe route", ms };
+              }
               // Surface slowness as slowness. A service answering in 5s is a
               // latency problem to chase, not a dead one to restart.
               const slow = resp.ok && ms >= SERVICE_SLOW_MS;
@@ -4781,6 +7419,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               // A timeout is NOT proof of death — it is proof we stopped
               // waiting. Say which one happened so the two are never conflated.
               const timedOut = e && (e.name === "TimeoutError" || e.name === "AbortError");
+              // An OPTIONAL service refusing the connection is simply absent —
+              // "not installed", gray, never a red row.
+              if (!timedOut && svc.optional) {
+                return { ...svc, status: "n/a", detail: "not installed", ms };
+              }
               return {
                 ...svc,
                 status: timedOut ? "timeout" : "down",
@@ -4820,174 +7463,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // ── Resolve identity from auth token (cookie or settings) ──
     case "resolve-identity":
-      (async () => {
-        // 1. Find a token: settings API key > portal cookie
-        let token = SETTINGS.apiKey || null;
-        let source = token ? "settings" : null;
-
-        if (!token) {
-          for (const domain of ["portal.aitherium.com", "demo.aitherium.com", ".aitherium.com"]) {
-            try {
-              const cookie = await chrome.cookies.get({ url: `https://${domain.replace(/^\./, "")}`, name: "aither_auth_token" });
-              if (cookie?.value) {
-                token = cookie.value;
-                source = `cookie:${domain}`;
-                break;
-              }
-            } catch { /* no cookie access */ }
-          }
-        }
-
-        // Publish the discovered credential as the PORTAL BEARER.
-        //
-        // Without this the cookie path resolved an identity and then dropped the
-        // token on the floor: `aither_portal_bearer` was written ONLY by the
-        // in-extension email+password login (portal-api.js portalLogin /
-        // portalVerify2fa). A user signed in at portal.aitherium.com in this very
-        // browser therefore had every portal API call go out with NO Authorization
-        // header — extension fetches are cross-origin to the portal, so the cookie
-        // is never attached either. Three symptoms, one cause:
-        //   * /api/me/workspaces  -> 401 -> empty list -> "no workspace"
-        //   * mintRelayToken()    -> "not authenticated" -> IRC/relay never connects
-        //   * pullEntitlement()   -> "not authenticated" -> owner stuck on tier Free
-        // Quick Setup advertises "Sign in — From portal cookie or API key"; this is
-        // what makes the cookie half of that claim true.
-        if (token) {
-          try { await self.AitherPortal.setPortalBearer(token); } catch { /* no session storage */ }
-        }
-
-        // Track WHY a verify failed so a transient outage isn't reported as a
-        // logout: 401/403 = token actually rejected (truly logged out);
-        // network error / timeout / 5xx = verifier unreachable (still signed in).
-        let authRejected = false;
-
-        // 2. If we have a token, call /auth/me
-        if (token) {
-          const identityUrl = SETTINGS.remoteUrl
-            ? `${SETTINGS.remoteUrl}/services/identity/auth/me`
-            : `http://${LOOPBACK}:${SETTINGS.veilPort}/api/bridge/identity/auth/me`;
-          try {
-            const resp = await fetch(identityUrl, {
-              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-              signal: AbortSignal.timeout(5000),
-            });
-            if (resp.ok) {
-              const me = await resp.json();
-              sendResponse({ ok: true, source, identity: me, token });
-              return;
-            }
-            if (resp.status === 401 || resp.status === 403) {
-              authRejected = true;  // credentials genuinely invalid/expired
-            }
-            // 5xx / 429 / other → leave authRejected false (transient)
-          } catch (e) {
-            console.debug("[AitherConnect] Identity service unreachable, trying local session:", e.message);
-          }
-        }
-
-        // 3. NEW: Probe local Genesis for AitherShell session (~/.aither/auth.json)
-        try {
-          const localUrl = SETTINGS.remoteUrl
-            ? `${SETTINGS.remoteUrl}/api/auth/local-session`
-            : `http://${LOOPBACK}:${SETTINGS.veilPort}/api/bridge/genesis/auth/local-session`;
-          const localResp = await fetch(localUrl, {
-            headers: { "Content-Type": "application/json" },
-            signal: AbortSignal.timeout(3000),
-          });
-          if (localResp.ok) {
-            const session = await localResp.json();
-            if (session.authenticated && session.user) {
-              sendResponse({
-                ok: true,
-                source: "local-genesis",
-                identity: session.user,
-                token: null,
-              });
-              return;
-            }
-          }
-        } catch (e) {
-          console.debug("[AitherConnect] Local session probe failed:", e.message);
-        }
-
-        // 4. Couldn't verify. If we have a usable token/credentials AND the
-        //    failure was transient (NOT a 401/403 rejection), the user is still
-        //    signed in — the verifier was just unreachable (fleet flap, portal
-        //    down, tier switched to cloud). Return the stored identity with an
-        //    `unverified` flag so the UI keeps the session instead of flipping
-        //    to "Not authenticated".
-        const haveStored = !!(token || SETTINGS.userId || SETTINGS.cloudApiKey);
-        if (haveStored && !authRejected) {
-          const _slug = (SETTINGS.tenantId || "").replace(/^tnt_/, "");
-          sendResponse({
-            ok: true,
-            unverified: true,
-            source: "cached",
-            token: token || null,
-            identity: {
-              username: SETTINGS.userId || "",
-              display_name: SETTINGS.userId || "",
-              tenant_id: SETTINGS.tenantId || "",
-              tenant_slug: _slug,
-              workspace_id: SETTINGS.workspaceId || "",
-              workspace_slug: SETTINGS.workspaceId || "",
-            },
-          });
-          return;
-        }
-
-        sendResponse({
-          ok: false,
-          authRejected,
-          error: authRejected
-            ? "Your session expired or was rejected. Sign in again at portal.aitherium.com."
-            : "Not authenticated. Log in at portal.aitherium.com or run `aither login`.",
-        });
-      })();
+      resolveIdentity().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
       return true;
 
     // ── Auto-apply resolved identity to settings ──
     case "apply-identity":
-      (async () => {
-        try {
-          const { identity, token } = message;
-          const updates = {};
-          if (identity.tenant_id) updates.tenantId = identity.tenant_id;
-          // Workspace: prefer workspace_id/slug from /auth/me or local session
-          if (identity.workspace_id) {
-            updates.workspaceId = identity.workspace_id;
-          } else if (identity.workspace_slug) {
-            updates.workspaceId = identity.workspace_slug;
-          }
-          if (identity.username) updates.userId = identity.username;
-          // Also accept email as userId fallback (local session may have email but not username)
-          if (!updates.userId && identity.email) updates.userId = identity.email;
-          if (token && !SETTINGS.apiKey) updates.apiKey = token;
-          await saveSettings({ ...SETTINGS, ...updates });
-          // Persist the scopes this user may switch to (from /auth/me).
-          try {
-            const meta = identity.metadata || {};
-            await chrome.storage.local.set({
-              "aither-scopes": {
-                allowed: identity.allowed_tenants || [],
-                owns: meta.owns_tenants || [],
-                current: identity.tenant_slug || identity.tenant_id || "",
-                defaultScope: meta.default_scope || "",
-                updatedAt: Date.now(),
-              },
-            });
-          } catch (e) {
-            console.warn("[AitherConnect] Could not persist scopes:", e);
-          }
-          setTimeout(() => { connectToGenesis(); checkHealth(); }, 500);
-          // Now that we're authenticated, pull the subscription tier automatically.
-          pullEntitlement().catch(() => {});
-          sendResponse({ ok: true, applied: updates });
-        } catch (e) {
-          sendResponse({ ok: false, error: e.message });
-        }
-      })();
+      applyIdentity(message.identity, message.token)
+        .then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
       return true;
+
+    // ── The tenant's REAL apps (deployed + installable) ──
+    case "list-tenant-apps":
+      listTenantApps().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
+      return true;
+
 
     // ── Switch the active workspace/tenant scope ──
     // Follows the platform convention tenant_id = `tnt_{slug}` (ACTA
@@ -5041,7 +7530,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const r = await fetch(`${gateway}/v1/auth/device/code`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ client_name: "AitherConnect" }),
+            body: JSON.stringify({ client_name: "Awconnect" }),
             signal: AbortSignal.timeout(10000),
           });
           if (!r.ok) throw new Error(`device/code returned ${r.status}`);
@@ -5077,7 +7566,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               const kr = await fetch(`${gateway}/v1/auth/api-key`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Authorization": `Bearer ${data.api_key}` },
-                body: JSON.stringify({ name: "AitherConnect" }),
+                body: JSON.stringify({ name: "Awconnect" }),
                 signal: AbortSignal.timeout(10000),
               });
               if (kr.ok) durable = (await kr.json())?.api_key || "";
@@ -5112,6 +7601,60 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             : null,
           licenseTier,
         });
+      })();
+      return true;
+
+    case "get-harness-token":
+      // Sidepanel or other clients request the cached harness token.
+      // Used by sidepanel.js to make authenticated daemon calls.
+      (async () => {
+        const token = await self.HarnessAuth.readHarnessToken();
+        sendResponse({ token: token || null });
+      })();
+      return true;
+
+    case "list-decisions":
+      // Popup/sidepanel requests open decision cards from Genesis.
+      (async () => {
+        try {
+          if (!self.GenesisAuth) {
+            sendResponse({ ok: false, error: "GenesisAuth not available" });
+            return;
+          }
+          const decisions = await self.GenesisAuth.listDecisions('open');
+          if (!decisions) {
+            sendResponse({ ok: false, error: "Failed to fetch decisions" });
+            return;
+          }
+          sendResponse({ ok: true, decisions });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e.message || e) });
+        }
+      })();
+      return true;
+
+    case "answer-decision":
+      // Popup/sidepanel submits an answer to a decision card.
+      (async () => {
+        try {
+          if (!self.GenesisAuth) {
+            sendResponse({ ok: false, error: "GenesisAuth not available" });
+            return;
+          }
+          const result = await self.GenesisAuth.answerDecision(
+            message.cardId,
+            message.choice,
+            message.note || "",
+            message.via || "awconnect"
+          );
+          if (!result || result.status === 'error') {
+            sendResponse({ ok: false, error: result?.error || "Failed to answer" });
+            return;
+          }
+          sendResponse({ ok: true, result });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e.message || e) });
+        }
       })();
       return true;
 
@@ -5327,7 +7870,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
           sendResponse({ ok: true });
         } catch (e) {
-          console.debug("[AitherConnect] API capture forward failed:", e.message);
+          console.debug("[Awconnect] API capture forward failed:", e.message);
           sendResponse({ ok: false, error: e.message });
         }
       })();
@@ -5372,7 +7915,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       (async () => {
         // Discover a live FormBridge engine: try the pack-configured port, then
         // common demo/default ports. This lets the FormBridge app appear in
-        // AitherConnect whenever an engine is running locally — no exact-seed
+        // Awconnect whenever an engine is running locally — no exact-seed
         // dance required. Only a real FormBridge engine (health has packs/pypdf)
         // counts, so the Docker gateway on 8182 is correctly ignored.
         const cfgPort = (FORMBRIDGE_CFG && FORMBRIDGE_CFG.port) || null;
@@ -5407,7 +7950,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // ── Deep Research product discovery + license read ───────────────────
     // Mirrors formbridge-status: probe loopback for a locally-running Deep
-    // Research node and read its GET /api/license so AitherConnect can reflect
+    // Research node and read its GET /api/license so Awconnect can reflect
     // the gated-vs-active state BEFORE the user opens the app. Gated on the
     // response carrying sku === "deep-research" so an unrelated 8130 listener
     // is ignored (the formbridge packs/pypdf precedent).
@@ -5485,7 +8028,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // the host-side native launcher — exactly like launch-desktop. We forward
     // ONLY the managed flag + portal url; the host already holds the user's
     // synced license (AITHER_LICENSE_KEY / ~/.aither/license.json) which
-    // aither-adk's is_pack_available() reads. NEVER pass a license/signing key.
+    // awdk's is_pack_available() reads. NEVER pass a license/signing key.
     case "launch-deep-research":
       (async () => {
         const LAUNCHER_PORT = 8299;
@@ -5746,7 +8289,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ ok: false, error: rec?.error || "Recording failed" });
             return;
           }
-          console.log("[AitherConnect] Got audio from offscreen, b64 length:", (rec.audio_base64 || "").length);
+          console.log("[Awconnect] Got audio from offscreen, b64 length:", (rec.audio_base64 || "").length);
           const result = await transcribeWithRetry(rec.audio_base64, "recording.webm");
           sendResponse(result);
         } catch (e) {
@@ -5873,7 +8416,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               });
             } catch (e) {
               console.debug(
-                "[AitherConnect] Permission request for",
+                "[Awconnect] Permission request for",
                 pkg.origin,
                 "failed:",
                 e.message
@@ -5922,11 +8465,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 });
               })
               .then(() => {
-                console.debug("[AitherConnect] FormBridge prefill injected in tab", tabId);
+                console.debug("[Awconnect] FormBridge prefill injected in tab", tabId);
               })
               .catch((e) => {
                 console.debug(
-                  "[AitherConnect] FormBridge prefill injection failed:",
+                  "[Awconnect] FormBridge prefill injection failed:",
                   e.message
                 );
               });
@@ -5941,7 +8484,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     default:
-      console.debug("[AitherConnect] Unknown message type:", message.type);
+      console.debug("[Awconnect] Unknown message type:", message.type);
       sendResponse({ error: `Unknown message type: ${message.type}` });
   }
 });
@@ -5950,7 +8493,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Accept a small allowlist of request types from portal.aitherium.com and
 // sibling subdomains (*.aitherium.com), ONLY after origin validation:
 //   cta-prefill          — FormBridge form prefill handoff
-//   marketplace-install  — portal listing "Install via AitherConnect" button
+//   marketplace-install  — portal listing "Install via Awconnect" button
 //   aitherconnect-ping   — presence probe so portal pages can gate their UI
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
   // Whitelist: only accept from aitherium.com and its subdomains. Validate the
@@ -5971,7 +8514,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   const allowedOrigin = /^https:\/\/([a-z0-9-]+\.)*aitherium\.com$/i;
   if (!senderOrigin || !allowedOrigin.test(senderOrigin)) {
     console.warn(
-      "[AitherConnect] Rejected external message from untrusted origin:",
+      "[Awconnect] Rejected external message from untrusted origin:",
       senderOrigin || sender.url
     );
     sendResponse({ ok: false, error: "Untrusted origin" });
@@ -6002,7 +8545,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
             });
           } catch (e) {
             console.debug(
-              "[AitherConnect] Permission request for",
+              "[Awconnect] Permission request for",
               pkg.origin,
               "failed:",
               e.message
@@ -6051,11 +8594,11 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
               });
             })
             .then(() => {
-              console.debug("[AitherConnect] FormBridge prefill injected in tab", tabId);
+              console.debug("[Awconnect] FormBridge prefill injected in tab", tabId);
             })
             .catch((e) => {
               console.debug(
-                "[AitherConnect] FormBridge prefill injection failed:",
+                "[Awconnect] FormBridge prefill injection failed:",
                 e.message
               );
             });
@@ -6071,7 +8614,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   }
 
   // Marketplace install handoff from the portal: a listing page's
-  // "Install via AitherConnect" button sends the same shape the sidepanel
+  // "Install via Awconnect" button sends the same shape the sidepanel
   // uses and rides the identical resolution ladder (node → apply-pack →
   // copyable command). Origin is already validated above; the ladder itself
   // is fail-closed (a pack the caller doesn't own → license-required, never
@@ -6090,7 +8633,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   }
 
   // Ping from portal pages: lets a listing page render "Install via
-  // AitherConnect" only when the extension is actually present.
+  // Awconnect" only when the extension is actually present.
   if (message.type === "aitherconnect-ping") {
     sendResponse({ ok: true, version: chrome.runtime.getManifest().version, tier: DETECTED_TIER });
     return false;
@@ -6193,7 +8736,7 @@ async function getNamedOffscreenPort(name, reconnectType, getSingleton) {
     if (!hadDoc) throw e;
     // Existing doc is unresponsive — recreate it (last resort: this also
     // drops any warm inference pipeline, but the doc is dead anyway).
-    console.warn(`[AitherConnect] Offscreen doc unresponsive (${name}) — recreating`);
+    console.warn(`[Awconnect] Offscreen doc unresponsive (${name}) — recreating`);
     try { await chrome.offscreen.closeDocument(); } catch {}
     _lastLoadedWebMLModelId = null;
     portPromise = waitForOffscreenPort(name);
@@ -6237,7 +8780,7 @@ async function transcribeWithRetry(audio_base64, filename = "recording.webm") {
   const url = SETTINGS.remoteUrl
     ? `${SETTINGS.remoteUrl.replace(/\/+$/, "")}/services/voice/transcribe/base64`
     : `http://${LOOPBACK}:${SETTINGS.veilPort || 3000}/api/bridge/voice/transcribe/base64`;
-  console.log("[AitherConnect] STT →", url, "audio length:", (audio_base64 || "").length);
+  console.log("[Awconnect] STT →", url, "audio length:", (audio_base64 || "").length);
 
   let lastErr = "Unknown error";
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -6250,7 +8793,7 @@ async function transcribeWithRetry(audio_base64, filename = "recording.webm") {
         signal: AbortSignal.timeout(30000),
       });
       const raw = await res.text();
-      console.log("[AitherConnect] STT attempt", attempt + 1, "response:", res.status, raw.slice(0, 300));
+      console.log("[Awconnect] STT attempt", attempt + 1, "response:", res.status, raw.slice(0, 300));
       let data;
       try { data = JSON.parse(raw); } catch { data = { success: false, error: raw.slice(0, 200) }; }
       if (res.ok && data.success) {
@@ -6258,7 +8801,7 @@ async function transcribeWithRetry(audio_base64, filename = "recording.webm") {
       }
       lastErr = data.error || `HTTP ${res.status}`;
     } catch (e) {
-      console.warn("[AitherConnect] STT attempt", attempt + 1, "error:", e.message);
+      console.warn("[Awconnect] STT attempt", attempt + 1, "error:", e.message);
       lastErr = e.message;
     }
   }
@@ -6307,7 +8850,7 @@ async function markWebMLDownloaded(modelId) {
       "webml-downloaded": { ...(flags || {}), [modelId]: true },
     });
   } catch (e) {
-    console.debug("[AitherConnect] Could not persist webml-downloaded flag:", e.message);
+    console.debug("[Awconnect] Could not persist webml-downloaded flag:", e.message);
   }
 }
 
@@ -6384,7 +8927,7 @@ async function handleLocalChat(message, providerDef, sendResponse) {
         }
       }
     } catch (e) {
-      console.debug("[AitherConnect] KB retrieval skipped:", e.message);
+      console.debug("[Awconnect] KB retrieval skipped:", e.message);
     }
   }
   messages.push({ role: "user", content: message.text });
@@ -6545,14 +9088,17 @@ async function handleLocalChat(message, providerDef, sendResponse) {
 // NOTIFICATION CLICK
 // =============================================================================
 
-chrome.notifications.onClicked.addListener(() => {
-  // Open the PUBLIC portal, not the local Veil host. VEIL_URL is a localhost
-  // address in local mode; landing a user there breaks passwordless login
-  // (the auth cookie is issued for the public *.aitherium.com origin, so a
-  // localhost tab can never see it and just bounces back to /login). Use the
-  // configured public portal so the click behaves like a real customer's.
+chrome.notifications.onClicked.addListener((id) => {
+  // A notification that named its own destination (e.g. the X daily-summary
+  // toast → the side panel's social stats) opens THAT. Everything else keeps
+  // the old behaviour: the PUBLIC portal, not the local Veil host. VEIL_URL is
+  // a localhost address in local mode; landing a user there breaks passwordless
+  // login (the auth cookie is issued for the public *.aitherium.com origin, so
+  // a localhost tab can never see it and just bounces back to /login).
+  const dest = (id && _notificationTargets.get(id)) || null;
+  if (dest) _notificationTargets.delete(id);
   const portal = (SETTINGS && SETTINGS.portalUrl) || PORTAL_URL;
-  chrome.tabs.create({ url: portal });
+  chrome.tabs.create({ url: dest || portal });
 });
 
 // =============================================================================
@@ -6646,7 +9192,7 @@ async function performFederatedSearch(query, options = {}) {
   // 1. PRIMARY — AitherSearch web search (port 8114)
   try {
     const fetchUrl = `${SEARCH_URL}/search`;
-    console.log(`[AitherConnect] Search request: POST ${fetchUrl} query="${query}" mode=${mode}`);
+    console.log(`[Awconnect] Search request: POST ${fetchUrl} query="${query}" mode=${mode}`);
     // On the cloud tier the gateway's /search route is aither_sk-gated (it
     // proxies to genesis→AitherSearch), so send the cloud key; local/node tiers
     // reach search through the trusted bridge/proxy and need no bearer.
@@ -6670,14 +9216,14 @@ async function performFederatedSearch(query, options = {}) {
     if (!rawResp.ok) {
       const errText = await rawResp.text().catch(() => rawResp.statusText);
       errors.push(`Search service error: HTTP ${rawResp.status}`);
-      console.warn(`[AitherConnect] AitherSearch HTTP ${rawResp.status}: ${errText.slice(0, 200)}`);
+      console.warn(`[Awconnect] AitherSearch HTTP ${rawResp.status}: ${errText.slice(0, 200)}`);
     } else {
       let searchResp;
       try {
         searchResp = await rawResp.json();
       } catch (jsonErr) {
         errors.push("Search returned invalid response");
-        console.warn("[AitherConnect] AitherSearch returned non-JSON response");
+        console.warn("[Awconnect] AitherSearch returned non-JSON response");
         searchResp = {};
       }
 
@@ -6722,14 +9268,14 @@ async function performFederatedSearch(query, options = {}) {
       });
 
       console.log(
-        `[AitherConnect] AitherSearch returned ${searchResp.results?.length || 0} results ` +
+        `[Awconnect] AitherSearch returned ${searchResp.results?.length || 0} results ` +
         `(provider: ${searchResp.provider}, ${searchResp.search_time_ms}ms)`
       );
     }
   } catch (e) {
     const isTimeout = e.name === "TimeoutError" || e.name === "AbortError";
     errors.push(isTimeout ? "Search timed out" : "Search service unavailable");
-    console.warn("[AitherConnect] AitherSearch unavailable, falling back:", e.message);
+    console.warn("[Awconnect] AitherSearch unavailable, falling back:", e.message);
   }
 
   // 2. SECONDARY — Nexus knowledge base (internal docs / ingested content)
@@ -6760,7 +9306,7 @@ async function performFederatedSearch(query, options = {}) {
         });
       }
     } catch (e) {
-      console.debug("[AitherConnect] Nexus search error:", e.message);
+      console.debug("[Awconnect] Nexus search error:", e.message);
     }
   }
 
@@ -6792,7 +9338,7 @@ async function ingestToAitherOS(payload) {
         body: JSON.stringify({ ...payload, timestamp: new Date().toISOString() }),
       });
     } catch {
-      console.log("[AitherConnect] AitherOS ingestion offline");
+      console.log("[Awconnect] AitherOS ingestion offline");
     }
   }
 }
@@ -6857,8 +9403,8 @@ async function knowledgeIngest({ content, source, title, tags, collection, metad
   const caps = TierDetect.capabilitiesFor(DETECTED_TIER);
   if (caps.hasFleet) {
     fleetKnowledgeIngest({ content, source, title, tags, collection, metadata })
-      .then((r) => console.debug("[AitherConnect] Fleet KB mirror:", Object.keys(r).filter((k) => r[k])))
-      .catch((e) => console.debug("[AitherConnect] Fleet KB mirror failed:", e.message));
+      .then((r) => console.debug("[Awconnect] Fleet KB mirror:", Object.keys(r).filter((k) => r[k])))
+      .catch((e) => console.debug("[Awconnect] Fleet KB mirror failed:", e.message));
   }
 
   return {
@@ -6900,7 +9446,7 @@ async function fleetKnowledgeIngest({ content, source, title, tags, collection, 
       });
       if (resp.ok) results.workspace = await resp.json();
     } catch (e) {
-      console.debug("[AitherConnect] Workspace knowledge ingest failed:", e.message);
+      console.debug("[Awconnect] Workspace knowledge ingest failed:", e.message);
     }
   }
 
@@ -6919,7 +9465,7 @@ async function fleetKnowledgeIngest({ content, source, title, tags, collection, 
     });
     if (resp.ok) results.memory = await resp.json();
   } catch (e) {
-    console.debug("[AitherConnect] Memory remember failed:", e.message);
+    console.debug("[Awconnect] Memory remember failed:", e.message);
   }
 
   // 2. Genesis document/ingest (structured document storage)
@@ -6939,7 +9485,7 @@ async function fleetKnowledgeIngest({ content, source, title, tags, collection, 
     });
     if (resp.ok) results.document = await resp.json();
   } catch (e) {
-    console.debug("[AitherConnect] Document ingest failed:", e.message);
+    console.debug("[Awconnect] Document ingest failed:", e.message);
   }
 
   // 3. Nexus RAG ingest (vector embeddings for semantic search)
@@ -6962,7 +9508,7 @@ async function fleetKnowledgeIngest({ content, source, title, tags, collection, 
     });
     if (resp.ok) results.nexus = await resp.json();
   } catch (e) {
-    console.debug("[AitherConnect] Nexus ingest failed:", e.message);
+    console.debug("[Awconnect] Nexus ingest failed:", e.message);
   }
 
   // 4. Strata session ingest (telemetry + training data)
@@ -6984,7 +9530,7 @@ async function fleetKnowledgeIngest({ content, source, title, tags, collection, 
     });
     results.strata = true;
   } catch (e) {
-    console.debug("[AitherConnect] Strata ingest failed:", e.message);
+    console.debug("[Awconnect] Strata ingest failed:", e.message);
   }
 
   // 5. LyraWiki ingest (knowledge engine — autonomous processing, lint, graph sync)
@@ -7017,7 +9563,7 @@ async function fleetKnowledgeIngest({ content, source, title, tags, collection, 
     });
     if (resp.ok) results.lyra = await resp.json();
   } catch (e) {
-    console.debug("[AitherConnect] LyraWiki ingest failed:", e.message);
+    console.debug("[Awconnect] LyraWiki ingest failed:", e.message);
   }
 
   return results;
@@ -7037,7 +9583,31 @@ async function fleetKnowledgeIngest({ content, source, title, tags, collection, 
     await autoDetectTier();
     await syncRegisteredContentScripts();
     if (formbridgeQueue.length) await formbridgeDrainQueue();
+
+    // The autonomy bootstrap belongs HERE, not only in onInstalled/onStartup —
+    // for exactly the reason this block already exists. A service worker recycles
+    // constantly and neither of those events fires on a wake, so anything wired
+    // only to them runs once a day at best:
+    //   * ensureXAlarms  — alarms usually survive, but if the set is ever lost
+    //     nothing restores it and the account stops posting permanently.
+    //   * autoResolveIdentity — self-guards to a no-op once tenant/workspace/user
+    //     are all set, so this costs nothing on the common path; without it a
+    //     recycle leaves the workspace badge empty until the side panel is opened.
+    //   * sweepInjectables — open tabs are bare after a recycle. On x.com that is
+    //     not cosmetic: the bar is the in-page driver, so an un-swept tab is an
+    //     automation that silently never runs.
+    await ensureXAlarms();
+    autoResolveIdentity("worker-wake").catch(() => {});
+    // Debounced: the sweep executeScripts into every open http(s) tab, and a
+    // worker can wake many times a minute. Both injected scripts guard against
+    // double-injection, so the cost is wasted messages rather than duplicate
+    // bars — but there is no reason to pay it on every wake.
+    const _sw = await chrome.storage.local.get(["lastInjectSweepAt"]);
+    if (!_sw.lastInjectSweepAt || Date.now() - _sw.lastInjectSweepAt > 5 * 60 * 1000) {
+      await chrome.storage.local.set({ lastInjectSweepAt: Date.now() });
+      sweepInjectables().catch(() => {});
+    }
   } catch (e) {
-    console.warn("[AitherConnect] Warm-up failed:", e.message);
+    console.warn("[Awconnect] Warm-up failed:", e.message);
   }
 })();

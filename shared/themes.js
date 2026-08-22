@@ -1,5 +1,5 @@
 /**
- * AitherConnect Theme System
+ * Awconnect Theme System
  * ============================
  * Shared theme definitions for the Chrome extension (sidepanel + popup).
  * Theme IDs match AitherVeil themes so preferences stay consistent.

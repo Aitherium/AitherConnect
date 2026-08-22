@@ -1,5 +1,5 @@
 /**
- * AitherConnect Agent Extractor
+ * Awconnect Agent Extractor
  * ==============================
  *
  * Extracts structured, agent-friendly content from any web page.

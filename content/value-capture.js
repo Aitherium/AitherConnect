@@ -1,5 +1,5 @@
 /**
- * AitherConnect — FormBridge value capture (origin-scoped, anchor-gated).
+ * Awconnect — FormBridge value capture (origin-scoped, anchor-gated).
  *
  * Registered dynamically (id "aither-formbridge") ONLY for the origin named in
  * the installed mapping pack — never broad-matched. Captures input/textarea/

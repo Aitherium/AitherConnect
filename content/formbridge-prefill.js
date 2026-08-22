@@ -1,5 +1,5 @@
 /**
- * AitherConnect — FormBridge prefill (origin-scoped, no-submit).
+ * Awconnect — FormBridge prefill (origin-scoped, no-submit).
  *
  * Fills a web form from a pre-fill package WITHOUT clicking submit, WITHOUT
  * touching password fields, WITHOUT interacting with CAPTCHAs. The user reviews
@@ -72,7 +72,7 @@
     // Origin-scoped validation: ALWAYS CHECK.
     if (location.origin !== pkg.origin) {
       console.warn(
-        "[AitherConnect FormBridge] Origin mismatch: page is",
+        "[Awconnect FormBridge] Origin mismatch: page is",
         location.origin,
         "but package is for",
         pkg.origin,
@@ -96,7 +96,7 @@
         }
       } catch (e) {
         console.debug(
-          "[AitherConnect FormBridge] Error filling field",
+          "[Awconnect FormBridge] Error filling field",
           field.role,
           ":",
           e.message
@@ -115,7 +115,7 @@
           highlightSubmitButton(submitEl);
         }
       } catch (e) {
-        console.debug("[AitherConnect FormBridge] Error highlighting submit button:", e.message);
+        console.debug("[Awconnect FormBridge] Error highlighting submit button:", e.message);
       }
     }
   };
@@ -230,7 +230,7 @@
         }
       );
     } catch (e) {
-      console.debug("[AitherConnect FormBridge] Storage load failed:", e.message);
+      console.debug("[Awconnect FormBridge] Storage load failed:", e.message);
     }
   }
 })();

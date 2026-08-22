@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     :root {
       --bg-primary: #030305;
@@ -237,8 +239,8 @@
   </style>
 </head>
 <body>
-  <h1>⚡ AitherConnect Settings</h1>
-  <p class="subtitle">Configure how AitherConnect communicates with AitherOS services</p>
+  <h1>⚡ Awconnect Settings</h1>
+  <p class="subtitle">Configure how Awconnect communicates with AitherOS services</p>
 
   <!-- Status -->
   <div class="status-bar">
@@ -249,7 +251,7 @@
   <!-- Connectivity Tier -->
   <div class="section">
     <h2>Connectivity Tier</h2>
-    <p class="desc">AitherConnect auto-detects the best available tier every 30s. Override below or configure cloud access.</p>
+    <p class="desc">Awconnect auto-detects the best available tier every 30s. Override below or configure cloud access.</p>
 
     <div class="field-row" style="margin-bottom:14px;">
       <div class="field">
@@ -261,12 +263,12 @@
           <option value="cloud">Force: Cloud Gateway</option>
           <option value="provider">AI Provider (BYOK)</option>
         </select>
-        <div class="hint">Auto probes Genesis → AitherNode → Cloud every 30 seconds. BYOK uses your own LLM keys.</div>
+        <div class="hint">Auto probes Genesis → awnode → Cloud every 30 seconds. BYOK uses your own LLM keys.</div>
       </div>
       <div class="field">
         <label>Node Port</label>
         <input type="number" id="nodePort" placeholder="8090" />
-        <div class="hint">AitherNode ADK standalone port (default: 8090)</div>
+        <div class="hint">awnode ADK standalone port (default: 8090)</div>
       </div>
     </div>
 
@@ -368,7 +370,7 @@
   <!-- License -->
   <div class="section" id="license-section">
     <h2>License</h2>
-    <p class="desc">Manage your AitherConnect license and tier.</p>
+    <p class="desc">Manage your Awconnect license and tier.</p>
 
     <div class="field">
       <label>Current License Status</label>
@@ -456,6 +458,10 @@
           <label>Canvas Port</label>
           <input type="number" id="canvasPort" placeholder="8108" />
         </div>
+        <div class="field">
+          <label>Bonsai Image Port</label>
+          <input type="number" id="bonsaiPort" placeholder="8798" />
+        </div>
       </div>
     </div>
 
@@ -490,7 +496,7 @@
   <!-- Tenant / Workspace / Project Scoping -->
   <div class="section">
     <h2>Platform Scoping</h2>
-    <p class="desc">Scope all AitherConnect requests to a specific tenant, workspace, and project. These headers are sent with every API call.</p>
+    <p class="desc">Scope all Awconnect requests to a specific tenant, workspace, and project. These headers are sent with every API call.</p>
     <div class="field-row">
       <div class="field">
         <label>Tenant ID</label>
@@ -522,7 +528,114 @@
     </div>
   </div>
 
+  <!-- Theme Picker -->
+  <div class="section">
+    <h2>Appearance</h2>
+    <p class="desc">Choose your theme for the extension UI. Your preference is saved to your browser and persists across restarts.</p>
+    <div id="theme-picker-container" style="margin-top: 16px;"></div>
+  </div>
+
   <!-- Capture & Knowledge -->
+  <!-- On-page Aither -->
+  <div class="section">
+    <h2>On-Page Aither</h2>
+    <p class="desc">What Awconnect draws into the websites you visit. The side panel is unaffected by these — it is the extension's own UI.</p>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Aither Command Bar</div>
+        <div class="toggle-hint">Injects the Aither bar into every page (never onto aitherium.com itself — the Living OS renders its own dock there). On x.com and linkedin.com this bar is also what <strong>drives the social automation</strong>: turning it off stops posting and engagement. Use the bar's own hide control to dismiss it on this browser without disabling automation.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="commandBarEnabled" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">AitherOS Overlay (experimental)</div>
+        <div class="toggle-hint">Iframes the Living OS chrome over the current page. Requires the site half (<code>?mode=overlay</code> + <code>os-regions</code>) to be live on the apex; until then the overlay paints an opaque desktop over the page. Leave off unless you are testing it.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="osOverlayEnabled" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">On-device model (Bonsai)</div>
+        <div class="toggle-hint">Lets this extension download a Bonsai model (<strong>236&nbsp;MB &ndash; 3.6&nbsp;GB</strong>) and run it on <strong>your GPU</strong>, in the background, for on-device composing and replies. Nothing is sent to a server for it. <strong>Off until you turn it on</strong> &mdash; an unattended multi-gigabyte download is not something an extension may decide for you. Turning it off stops future loads; already-downloaded weights stay cached until you clear site data.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="bonsaiOnDeviceEnabled" />
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Social automation -->
+  <div class="section">
+    <h2>Social Automation (X)</h2>
+    <p class="desc">
+      Autonomous posting and engagement on x.com, run in this logged-in browser.
+      These are the <strong>only</strong> controls for it — nothing else may write them.
+      Requires the Aither Command Bar above, which is the in-page driver.
+    </p>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Autonomous Posting</div>
+        <div class="toggle-hint">Aither writes and publishes a post on a timer.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="xAutopostEnabled" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Autonomous Engagement</div>
+        <div class="toggle-hint">Likes and replies to the home timeline. This is where growth comes from.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="xEngageEnabled" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Topic Discovery</div>
+        <div class="toggle-hint">Searches topics, follows relevant accounts, engages beyond the home feed.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="xDiscoverEnabled" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="field">
+      <label>Post interval (minutes)</label>
+      <input type="number" id="xAutopostIntervalMin" min="15" step="5" placeholder="180" />
+      <div class="toggle-hint">Default 180 (~8/day). Applies on the next browser start.</div>
+    </div>
+    <div class="field">
+      <label>Engage interval (minutes)</label>
+      <input type="number" id="xEngageIntervalMin" min="15" step="5" placeholder="60" />
+    </div>
+
+    <div class="field">
+      <label>Status</label>
+      <div id="x-automation-status"
+           style="padding:10px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:var(--font-mono);">
+        checking…
+      </div>
+    </div>
+  </div>
+
   <div class="section">
     <h2>Capture & Knowledge</h2>
     <p class="desc">Control local knowledge base and content capture settings.</p>

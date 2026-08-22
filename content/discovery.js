@@ -1,5 +1,5 @@
 /**
- * AitherConnect — FormBridge Discovery (DOM scrape + collector, isolated world).
+ * Awconnect — FormBridge Discovery (DOM scrape + collector, isolated world).
  *
  * Discovery mode: builds an inventory of what's readable on the EHR so the
  * operator can map fields → logical names and auto-generate the pack's

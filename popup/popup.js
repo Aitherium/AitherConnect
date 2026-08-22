@@ -36,6 +36,227 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // ── Access requests (A2A permission cards) ───────────────────
+  // A federated agent is blocked RIGHT NOW waiting on a decision here. The
+  // portal tray and `adk approvals` show the same cards from the same store,
+  // so deciding in any one of them clears the others.
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  async function renderApprovals() {
+    const section = $('approvals-section');
+    const list = $('approvals-list');
+    if (!section || !list) return;
+
+    let resp;
+    try {
+      resp = await chrome.runtime.sendMessage({ type: 'get-access-requests' });
+    } catch {
+      section.style.display = 'none';
+      return;
+    }
+    // Signed out or unreachable: stay hidden rather than showing a stale or
+    // empty panel that implies "nothing is waiting" when we simply cannot see.
+    if (!resp?.ok || !resp.cards?.length) {
+      section.style.display = 'none';
+      return;
+    }
+
+    section.style.display = '';
+    list.innerHTML = resp.cards.map((c) => `
+      <div class="appr-card" data-id="${esc(c.id)}">
+        <div class="appr-agent">${esc(c.requesting_agent || 'agent')} <span style="font-weight:400;color:var(--text-muted)">· ${esc(c.requesting_tenant || 'unknown')}</span></div>
+        <div class="appr-res">${esc(c.requested_resource || c.message || '')}</div>
+        <div class="appr-why">${esc(c.message || '')}</div>
+        <div class="appr-actions">
+          <button class="appr-btn appr-approve" data-decision="approve">Approve</button>
+          <button class="appr-btn appr-deny" data-decision="deny">Deny</button>
+        </div>
+        <div class="appr-out"></div>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('.appr-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const card = btn.closest('.appr-card');
+        const out = card.querySelector('.appr-out');
+        const decision = btn.dataset.decision;
+        card.querySelectorAll('.appr-btn').forEach((b) => { b.disabled = true; });
+        out.innerHTML = '';
+
+        const r = await chrome.runtime.sendMessage({
+          type: 'decide-access-request', id: card.dataset.id, decision,
+        }).catch((e) => ({ ok: false, error: String(e) }));
+
+        // Keep the card on failure. Removing it would report success for a
+        // decision that did not happen — and take away the only surface here
+        // that could retry it.
+        if (!r?.ok) {
+          out.innerHTML = `<div class="appr-err">${esc(r?.error || 'Failed')}</div>`;
+          card.querySelectorAll('.appr-btn').forEach((b) => { b.disabled = false; });
+          return;
+        }
+
+        const token = r.result?.grant_token;
+        if (token) {
+          // Returned exactly once. Show it, or the approval is unusable.
+          out.innerHTML = `<div class="appr-token">
+            <span style="font-size:10px;color:var(--success)">Send back as X-A2A-Grant${r.result?.ttl_minutes ? ` (${esc(r.result.ttl_minutes)}m)` : ''}</span>
+            <code>${esc(token)}</code>
+          </div>`;
+          card.querySelector('.appr-actions').style.display = 'none';
+        } else {
+          card.remove();
+          if (!list.children.length) section.style.display = 'none';
+        }
+      });
+    });
+  }
+
+  renderApprovals();
+
+  // ── Decision Cards ───────────────────────────────────────────
+  async function renderDecisions() {
+    const section = $('decisions-section');
+    const list = $('decisions-list');
+    const errorDiv = $('decisions-error');
+    const noTokenDiv = $('decisions-no-token');
+    if (!section || !list) return;
+
+    try {
+      // Use GenesisAuth (from genesis-auth.js) to list open decisions.
+      // GenesisAuth uses portal bearer authentication (from chrome.storage.session).
+      if (typeof self.GenesisAuth === 'undefined') {
+        // Try to get decisions via background message instead
+        const resp = await chrome.runtime.sendMessage({ type: 'list-decisions' });
+        if (!resp?.ok || !resp.decisions?.decisions?.length) {
+          section.style.display = 'none';
+          return;
+        }
+        renderDecisionCards(resp.decisions.decisions);
+        section.style.display = '';
+        errorDiv.style.display = 'none';
+        noTokenDiv.style.display = 'none';
+      } else {
+        const data = await self.GenesisAuth.listDecisions('open');
+        if (!data?.decisions?.length) {
+          section.style.display = 'none';
+          return;
+        }
+        renderDecisionCards(data.decisions);
+        section.style.display = '';
+        errorDiv.style.display = 'none';
+        noTokenDiv.style.display = 'none';
+      }
+    } catch (e) {
+      console.debug('[popup] decisions render failed:', e);
+      // Check if it's a "not found" or unavailable error
+      if (e.code === 'ENDPOINT_NOT_FOUND') {
+        errorDiv.textContent = 'Decisions unavailable — Genesis is still loading';
+        errorDiv.style.display = '';
+        noTokenDiv.style.display = 'none';
+      } else if (e.code === 'GENESIS_UNAVAILABLE') {
+        errorDiv.textContent = 'Cannot reach Genesis — service offline or unreachable';
+        errorDiv.style.display = '';
+        noTokenDiv.style.display = 'none';
+      } else if (String(e).includes('401')) {
+        noTokenDiv.textContent = 'Sign in to your account to see pending decisions';
+        noTokenDiv.style.display = '';
+        errorDiv.style.display = 'none';
+      } else {
+        errorDiv.textContent = `Failed: ${e.message || String(e)}`;
+        errorDiv.style.display = '';
+        noTokenDiv.style.display = 'none';
+      }
+      section.style.display = '';
+      list.innerHTML = '';
+    }
+
+    function renderDecisionCards(decisions) {
+      list.innerHTML = decisions.map((card) => {
+        const urgencyClass = card.urgency === 'critical' || card.urgency === 'high' ? card.urgency : '';
+        const sourceInfo = [];
+        if (card.source?.session_id) sourceInfo.push(card.source.session_id.slice(0, 8));
+        if (card.source?.cwd) {
+          const cwdBase = card.source.cwd.split(/[/\\]/).pop();
+          if (cwdBase) sourceInfo.push(cwdBase);
+        }
+        const sourceStr = sourceInfo.length ? sourceInfo.join(' · ') : '';
+
+        // Render options as buttons. Text is never truncated here (gate DC001).
+        const optionsHtml = (card.options || []).map((opt) => `
+          <button class="decision-opt-btn" data-card-id="${esc(card.id)}" data-choice="${esc(opt.key)}"
+            title="${esc(opt.label)}">${esc(opt.label)}</button>
+        `).join('');
+
+        return `
+          <div class="decision-card ${urgencyClass}" data-card-id="${esc(card.id)}">
+            <div class="decision-title">${esc(card.title || 'Decision')}</div>
+            <div class="decision-meta">
+              ${card.urgency ? `<span class="decision-badge ${card.urgency === 'critical' || card.urgency === 'high' ? 'urgent' : ''}">${esc(card.urgency)}</span>` : ''}
+              ${sourceStr ? `<span class="decision-badge">${esc(sourceStr)}</span>` : ''}
+            </div>
+            <div class="decision-options">${optionsHtml}</div>
+            <div class="decision-feedback" style="font-size:10px;color:var(--error);margin-top:4px;display:none"></div>
+          </div>
+        `;
+      }).join('');
+
+      // Add click handlers to option buttons
+      list.querySelectorAll('.decision-opt-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const cardId = btn.dataset.cardId;
+          const choice = btn.dataset.choice;
+          const card = btn.closest('.decision-card');
+          const feedback = card?.querySelector('.decision-feedback');
+          const allBtns = card?.querySelectorAll('.decision-opt-btn') || [];
+
+          // Disable all buttons while submitting
+          allBtns.forEach((b) => { b.disabled = true; });
+          if (feedback) feedback.style.display = 'none';
+
+          try {
+            // Use GenesisAuth if available, else go through background
+            let result;
+            if (typeof self.GenesisAuth !== 'undefined') {
+              result = await self.GenesisAuth.answerDecision(cardId, choice, '', 'awconnect');
+            } else {
+              const r = await chrome.runtime.sendMessage({
+                type: 'answer-decision',
+                cardId,
+                choice,
+                via: 'awconnect',
+              });
+              result = r;
+            }
+
+            if (result?.status === 'error' || !result?.ok) {
+              if (feedback) {
+                feedback.textContent = result?.error || 'Failed to submit';
+                feedback.style.display = '';
+              }
+              allBtns.forEach((b) => { b.disabled = false; });
+              return;
+            }
+
+            // Success: remove the card (or show success)
+            card?.remove();
+            if (!list.children.length) section.style.display = 'none';
+            showFeedback('Decision submitted', 'success', 2000);
+          } catch (err) {
+            if (feedback) {
+              feedback.textContent = String(err.message || err);
+              feedback.style.display = '';
+            }
+            allBtns.forEach((b) => { b.disabled = false; });
+          }
+        });
+      });
+    }
+  }
+
+  renderDecisions();
+
   // ── 1. Get ecosystem status (detailed) ──────────────────────
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'get-ecosystem-status' });
@@ -182,6 +403,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.close();
   });
 
+  // OS Over This Page — pull up the holographic Living OS over the current tab.
+  $('btn-os-overlay').addEventListener('click', async () => {
+    showFeedback('Pulling up the OS over this page...', 'info', 0);
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'toggle-overlay' });
+      if (resp?.ok) {
+        window.close();
+      } else {
+        showFeedback(resp?.error || 'OS overlay unavailable', 'error', 5000);
+      }
+    } catch (e) {
+      showFeedback('Error: ' + e.message, 'error', 5000);
+    }
+  });
+
   // Settings button — opens options page
   $('btn-settings').addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
@@ -289,7 +525,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const PRODUCT_URLS = {
     'btn-get-aitheros':      'https://github.com/Aitherium/AitherOS/releases/latest',
     'btn-get-aithershell':   'https://pypi.org/project/aithershell/',
-    'btn-get-aithernode':    'https://pypi.org/project/aithernode/',
+    'btn-get-awnode':    'https://pypi.org/project/awnode/',
     'btn-get-aitherdesktop': 'https://github.com/Aitherium/AitherOS/releases/latest',
   };
 

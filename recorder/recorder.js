@@ -1,5 +1,5 @@
 /**
- * AitherConnect Recorder Tab
+ * Awconnect Recorder Tab
  * ==========================
  * Opens in a real browser tab where getUserMedia permission prompts work.
  * Records audio via MediaRecorder, converts to base64, sends back to

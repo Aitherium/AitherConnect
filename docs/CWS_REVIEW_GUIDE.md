@@ -1,10 +1,10 @@
 # Chrome Web Store Review Submission Guide
 
-This document is an internal playbook for submitting AitherConnect to the Chrome Web Store (CWS) and passing their review process.
+This document is an internal playbook for submitting Awconnect to the Chrome Web Store (CWS) and passing their review process.
 
 ## Single-Purpose Narrative
 
-**For reviewers:** AitherConnect is an **AI-powered browsing assistant** that adds intelligent chat and knowledge management to your browser. It lets you:
+**For reviewers:** Awconnect is an **AI-powered browsing assistant** that adds intelligent chat and knowledge management to your browser. It lets you:
 
 1. **Chat with AI** — Ask questions about pages you're viewing, with full context
 2. **Save to a local knowledge base** — Build your own searchable library as you browse
@@ -30,7 +30,7 @@ This is what a CWS reviewer will do. Our extension must pass every step.
 ### 2. Onboarding
 
 - Click the extension icon → Popup opens
-- See "Welcome to AitherConnect" screen (or similar onboarding)
+- See "Welcome to Awconnect" screen (or similar onboarding)
 - Expect: Clear buttons for "Settings," "Quick Start," or "Learn More"
 
 **Reviewer check:** No tracking pixels, no external CDN code loaded, onboarding is in-extension only
@@ -64,7 +64,7 @@ This is what a CWS reviewer will do. Our extension must pass every step.
 
 - Go to any website (e.g., https://example.com)
 - Select some text with your mouse
-- Right-click → "Save to AitherConnect Knowledge Base"
+- Right-click → "Save to Awconnect Knowledge Base"
 - Expect: Confirmation message, "Saved to your KB"
 
 **Reviewer check:** No data exfiltration, no background analytics calls
@@ -80,7 +80,7 @@ This is what a CWS reviewer will do. Our extension must pass every step.
 ### 7. Privacy Policy
 
 - Check the extension listing page
-- Expect: A link to the privacy policy (https://github.com/Aitherium/AitherOS/blob/develop/AitherConnect/docs/PRIVACY_POLICY.md or similar)
+- Expect: A link to the privacy policy (https://github.com/Aitherium/AitherOS/blob/develop/awconnect/docs/PRIVACY_POLICY.md or similar)
 - Click and read it
 - Expect: Clear statement that data is stored locally, not sold, no tracking
 
@@ -118,7 +118,7 @@ URL: http://localhost:11434
 
 **CRITICAL:** Real API keys are NOT checked in. These are fetched by the reviewer from their own test accounts (created for free on each provider). Include instructions:
 
-> "To test: Create a free/trial account on your chosen provider, generate a test API key, and paste it into AitherConnect settings."
+> "To test: Create a free/trial account on your chosen provider, generate a test API key, and paste it into Awconnect settings."
 
 ---
 
@@ -127,7 +127,7 @@ URL: http://localhost:11434
 ### Title (max 45 characters)
 
 ```
-AitherConnect — AI Chat & Knowledge Base
+Awconnect — AI Chat & Knowledge Base
 ```
 
 ### Short Description (max ~50 chars for the store card)
@@ -139,7 +139,7 @@ Local AI chat assistant with a personal knowledge base. No tracking, no account 
 ### Full Description (for the listing page)
 
 ```
-AitherConnect is an AI-powered browsing assistant that brings intelligent chat and knowledge 
+Awconnect is an AI-powered browsing assistant that brings intelligent chat and knowledge 
 management to your browser.
 
 FEATURES:
@@ -185,7 +185,7 @@ Get started in 2 minutes:
    → Extension icon in toolbar with a tooltip
 
 2. **Onboarding screen**  
-   → "Welcome to AitherConnect" with provider selection dropdown
+   → "Welcome to Awconnect" with provider selection dropdown
 
 3. **Settings page**  
    → API key input, model selection, provider dropdown
@@ -292,7 +292,7 @@ Use this checklist **BEFORE submitting:**
 
 ### Issue: Reviewer says "We found obfuscation"
 
-**Root cause:** Build output is minified (webpack/terser). AitherConnect is a no-build extension; if it happens, one of our libraries was transpiled.
+**Root cause:** Build output is minified (webpack/terser). Awconnect is a no-build extension; if it happens, one of our libraries was transpiled.
 
 **Fix:** Ensure all JS in the extension is readable source. If you use a bundler, expose source maps to CWS.
 

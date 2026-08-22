@@ -1,5 +1,5 @@
 /**
- * AitherConnect — CTA autofill engine (generic, adapter-driven).
+ * Awconnect — CTA autofill engine (generic, adapter-driven).
  *
  * Runs on a civic form page the user was linked to. If the URL carries an
  * `#aither_cta=<base64 json>` fragment (put there by the AitherDiscord bot), it
@@ -247,7 +247,7 @@
    * Main engine: resolve adapter, wait for form, fill by role.
    */
   async function run() {
-    banner("AitherConnect is filling your comment…");
+    banner("Awconnect is filling your comment…");
 
     const adapter = await resolveAdapter();
     const roles = adapter.roles || {};
@@ -268,7 +268,7 @@
     }
 
     if (!commentField) {
-      banner("AitherConnect couldn't find the comment box — paste your draft manually.");
+      banner("Awconnect couldn't find the comment box — paste your draft manually.");
       return;
     }
 
@@ -289,7 +289,7 @@
     }
 
     banner(
-      "AitherConnect filled your comment. Review it, pick your identity if needed, " +
+      "Awconnect filled your comment. Review it, pick your identity if needed, " +
         "solve the CAPTCHA, and click Submit yourself — nothing has been sent."
     );
   }

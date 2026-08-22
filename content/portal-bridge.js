@@ -1,4 +1,4 @@
-// AitherConnect ↔ portal bridge (content script, *.aitherium.com + local Veil)
+// Awconnect ↔ portal bridge (content script, *.aitherium.com + local Veil)
 // ---------------------------------------------------------------------------
 // Lets portal pages talk to the extension WITHOUT knowing its extension id
 // (unpacked dev installs have a machine-specific id, so onMessageExternal
@@ -20,7 +20,12 @@
 (() => {
   "use strict";
 
-  const RELAY_TYPES = new Set(["marketplace-install", "aitherconnect-ping"]);
+  // "fleet-sync": the Living OS's local-first PIM sync seam. The static apex cannot run
+  // its /api routes (GitHub Pages moves them out of the export), so the OS hands sync ops
+  // to the extension, whose background fetches the fleet-served portal WITH the session
+  // cookie and no CORS wall. The background allowlists the ops (an exact op → path map,
+  // never a caller-supplied path), so this relay adds reach, not authority.
+  const RELAY_TYPES = new Set(["marketplace-install", "aitherconnect-ping", "fleet-sync"]);
 
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;

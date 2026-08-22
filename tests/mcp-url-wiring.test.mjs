@@ -146,9 +146,9 @@ test("MCP discovery code structure tries mcpUrl if configured", () => {
 });
 
 // Test 4: Verify the response indicates which source was used
-test("Response indicates MCP source (mcpUrl, aithernode, genesis, or cloud)", () => {
+test("Response indicates MCP source (mcpUrl, awnode, genesis, or cloud)", () => {
   // The new code returns different 'source' and 'tier' values:
-  // - source: "aithernode" (tier: "node")
+  // - source: "awnode" (tier: "node")
   // - source: "mcpUrl" (tier: "mcp-configured")
   // - otherwise falls back to tier-based (genesis or cloud)
   //
@@ -159,8 +159,8 @@ test("Response indicates MCP source (mcpUrl, aithernode, genesis, or cloud)", ()
   const bgCode = fs.readFileSync(bgPath, "utf8");
 
   assert(
-    bgCode.includes('source: "aithernode"'),
-    "Should report aithernode as source",
+    bgCode.includes('source: "awnode"'),
+    "Should report awnode as source",
   );
 
   assert(

@@ -1,4 +1,4 @@
-// AitherConnect — on-page X growth control panel.
+// Awconnect — on-page X growth control panel.
 // Injected into x.com so the owner sees and drives Aither's autonomous loops
 // (post / engage / discover) right on the page — no console, no popup. Talks to
 // the service worker via chrome.runtime.sendMessage. Same pattern as the

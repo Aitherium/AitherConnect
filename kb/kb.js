@@ -1,5 +1,5 @@
 /**
- * AitherConnect Knowledge Base Manager
+ * Awconnect Knowledge Base Manager
  * ====================================
  *
  * Full-tab KB UI: document management, search, chunking, embeddings,

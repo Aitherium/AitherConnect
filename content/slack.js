@@ -1,5 +1,5 @@
 // Slack-specific harvester
-console.log("[AitherConnect] Slack module loaded");
+console.log("[Awconnect] Slack module loaded");
 
 function scrapeSlack() {
     // Attempt to find messages in the current view

@@ -2,9 +2,9 @@
 /**
  * sync-webml.mjs — Mirror portal-kit's compiled WebML stack into the extension.
  * ============================================================================
- * Source of truth: AitherOS/apps/packages/portal-kit/dist/webml/ (compiled
- * output — NEVER edit portal-kit/src/webml/* from here; this script only
- * consumes what `npm run build` in portal-kit produced).
+ * Source of truth: portal-kit's compiled dist/webml/ output (in the
+ * platform monorepo) — NEVER edit portal-kit/src/webml/* from here; this
+ * script only consumes what `npm run build` in portal-kit produced).
  *
  * What it does:
  *   1. Copies models.js / protocol.js / worker-core.js into
@@ -31,8 +31,8 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const extRoot = path.join(__dirname, "..");
 const aitherosRoot = process.env.AITHEROS_ROOT || "D:\\AitherOS-Fresh\\AitherOS";
-// The repo checkout nests portal code under AitherOS/apps/ — accept either the
-// checkout root or the AitherOS/ subdir as AITHEROS_ROOT.
+// The monorepo checkout nests portal code one directory deeper than its own
+// root — accept either the checkout root or that subdirectory as AITHEROS_ROOT.
 const srcDir = [
   path.join(aitherosRoot, "apps", "packages", "portal-kit", "dist", "webml"),
   path.join(aitherosRoot, "AitherOS", "apps", "packages", "portal-kit", "dist", "webml"),
@@ -42,7 +42,7 @@ const outDir = path.join(extRoot, "shared", "webml-mirror");
 const MIRROR_FILES = ["models.js", "protocol.js", "worker-core.js"];
 
 const HEADER = (name) =>
-  `// ${name} — synced from @aitheros/portal-kit dist/webml — DO NOT DRIFT.\n` +
+  `// ${name} — synced from awkit dist/webml — DO NOT DRIFT.\n` +
   `// Regenerate with: node tools/sync-webml.mjs (see SYNC-NOTE.md).\n` +
   `// Import extensions are rewritten for native browser ESM.\n`;
 
@@ -83,7 +83,7 @@ const modelsSrc = fs.readFileSync(path.join(srcDir, "models.js"), "utf8");
 const stripped = modelsSrc.replace(/^export /gm, "");
 const iife =
   `// models.iife.js — GENERATED from portal-kit dist/webml/models.js — DO NOT EDIT.\n` +
-  `// Synced from @aitheros/portal-kit dist/webml — do not drift.\n` +
+  `// Synced from awkit dist/webml — do not drift.\n` +
   `// Regenerate with: node tools/sync-webml.mjs (see SYNC-NOTE.md).\n` +
   `(function () {\n  "use strict";\n\n` +
   stripped.replace(/^/gm, "  ").replace(/^  $/gm, "") +

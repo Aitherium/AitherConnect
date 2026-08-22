@@ -1,5 +1,5 @@
 /**
- * AitherConnect Side Panel Controller
+ * Awconnect Side Panel Controller
  * =====================================
  *
  * Native extension UI — uses chrome.runtime messaging to talk to the
@@ -97,7 +97,29 @@
     return `${state.baseUrl}:${state.genesisPort}${p ? "/" + p : ""}`;
   }
 
+  /**
+   * Base URL for embedding a built-in Veil app (Dashboard, Writer, ...).
+   *
+   * Was unconditionally `http://localhost:${state.veilPort}` — correct ONLY in
+   * local/bridge mode, where Veil's own frontend really is served on that port.
+   * In remote mode `state.veilPort` is 0 (see loadStateFromSettings), so every
+   * built-in app tile embedded `http://localhost:0/...` on a hosted session and
+   * failed with "localhost refused to connect" — this is why most of the Apps
+   * grid looked broken on anything but a local dev checkout. Mirrors svcUrl()'s
+   * branching: in remote mode there IS no separate local Veil, `state.baseUrl`
+   * already IS the hosted Veil origin.
+   */
   function veilUrl() {
+    if (state.baseUrl.includes("/api/bridge")) {
+      // Local bridge mode: Veil's frontend is served directly on veilPort, not
+      // through the API bridge prefix.
+      return `http://localhost:${state.veilPort}`;
+    }
+    if (state.genesisPort === 0) {
+      // Remote mode — baseUrl is the hosted Veil origin itself.
+      return state.baseUrl;
+    }
+    // Legacy direct mode (shouldn't happen normally).
     return `http://localhost:${state.veilPort}`;
   }
 
@@ -495,7 +517,54 @@
   const statusDot = $("status-dot");
   const tierBadge = $("tier-badge");
   const workspaceBadge = $("workspace-badge");
+  const modelSelect = $("model-select");
   const navTabs = $("nav-tabs");
+
+  // ── Model selection ────────────────────────────────────────────────────────
+  // Kept identical to content/aither-command-bar.js BACKENDS and persisted under
+  // the same `aitherBackend` key. Two surfaces answering with different brains
+  // while both claim to be "Awconnect" is worse than having no selector at
+  // all, which is what the side panel shipped with.
+  const MODELS = [
+    { id: "local:bonsai-1.7b",     label: "🧠 Bonsai 1.7B · on-device" },
+    { id: "local:bonsai-4b",       label: "🧠 Bonsai 4B · on-device" },
+    { id: "local:bonsai-8b",       label: "🧠 Bonsai 8B · on-device" },
+    { id: "local:bonsai-27b-text", label: "🧠 Bonsai 27B · on-device" },
+    { id: "aither-genesis", label: "Local Genesis" },
+    { id: "aither-node",    label: "Local awnode" },
+    { id: "aither-gateway", label: "Gateway (cloud)" },
+    { id: "aither-mcp",     label: "MCP (cloud)" },
+  ];
+
+  async function initModelSelect() {
+    if (!modelSelect) return;
+    MODELS.forEach((m) => {
+      const o = document.createElement("option");
+      o.value = m.id;
+      o.textContent = m.label;
+      modelSelect.appendChild(o);
+    });
+    try {
+      const stored = await chrome.storage.local.get(["aitherBackend"]);
+      if (stored && stored.aitherBackend) modelSelect.value = stored.aitherBackend;
+    } catch { /* storage unavailable — the default option stands */ }
+    modelSelect.addEventListener("change", async () => {
+      const id = modelSelect.value;
+      try { await chrome.storage.local.set({ aitherBackend: id }); } catch { /* noop */ }
+      // Tell the SW and the command bar, so a change here is not silently local
+      // to this panel.
+      try { chrome.runtime.sendMessage({ type: "set-backend", backend: id }); } catch { /* noop */ }
+    });
+    // A change made in the command bar must show up here too.
+    try {
+      chrome.storage.onChanged.addListener((ch, area) => {
+        if (area === "local" && ch.aitherBackend && ch.aitherBackend.newValue) {
+          modelSelect.value = ch.aitherBackend.newValue;
+        }
+      });
+    } catch { /* noop */ }
+  }
+  initModelSelect();
   const chatMessages = $("chat-messages");
   const chatInput = $("chat-input");
   const chatSend = $("chat-send");
@@ -580,6 +649,9 @@
     // Re-discover extension-contributed apps when opening Apps (a pack may have
     // been installed mid-session).
     if (panel === "apps" && typeof loadExtensionApps === "function") loadExtensionApps();
+
+    // Load decisions when the decisions tab is opened
+    if (panel === "decisions" && typeof loadDecisionsPanel === "function") loadDecisionsPanel();
   });
 
   // ====================================================================
@@ -1529,7 +1601,7 @@
     if (voiceState.presynthText === clean && voiceState.presynth) return;
     voiceState.presynthText = clean;
     voiceState.presynth = fetchSoniaTTS(clean).catch(e => {
-      console.warn("[AitherConnect] Pre-synth failed:", e);
+      console.warn("[Awconnect] Pre-synth failed:", e);
       return null;
     });
   }
@@ -1569,7 +1641,7 @@
       };
       audio.play();
     } catch (e) {
-      console.warn("[AitherConnect] Sonia TTS failed, using browser fallback:", e);
+      console.warn("[Awconnect] Sonia TTS failed, using browser fallback:", e);
       if ("speechSynthesis" in window) {
         const utt = new SpeechSynthesisUtterance(clean);
         const voices = speechSynthesis.getVoices();
@@ -1598,12 +1670,79 @@
   }
 
   // ── STT — Speech-to-Text ──────────────────────────────────────────
-  // Offscreen doc records audio (getUserMedia + MediaRecorder).
-  // Background.js transcribes via bridge → AitherVoice (Whisper).
+  // BROWSER FIRST. THE FLEET IS AN UPGRADE, NEVER A REQUIREMENT.
+  //
+  // The only path used to be: the offscreen doc records with getUserMedia+MediaRecorder,
+  // background.js ships the audio to the fleet's AitherVoice (Whisper), text comes back.
+  // So dictation was DEAD whenever the fleet was unreachable — on a laptop away from the
+  // box, on a customer's machine, any time the tunnel was down — and it sent the user's
+  // voice off their device to do something the browser can already do itself.
+  //
+  // Now window.SpeechRecognition runs FIRST and the fleet path is the fallback, so the
+  // feature works with nothing installed and nothing authenticated. Honest caveat, the same
+  // one the Living OS greeter carries: this is the BROWSER's API, and Chrome's
+  // implementation relays audio to Google. It needs no AitherOS service and survives the
+  // fleet being down; it is not on-device. Fully-local Whisper through shared/vendor/webml
+  // is the end state.
 
   let _sttActive = false;
+  let _localRec = null;   // live SpeechRecognition instance, when the browser path is used
+
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+
+  function resetMic() {
+    _sttActive = false;
+    _localRec = null;
+    micBtn.textContent = "������";
+    micBtn.style.color = "";
+    chatInput.placeholder = "Ask AitherOS...";
+  }
+
+  /** Browser-native dictation. Returns false if unavailable so the caller can fall back. */
+  function startLocalStt() {
+    if (!SpeechRec) return false;
+    let finalText = "";
+    try {
+      const rec = new SpeechRec();
+      rec.continuous = false;
+      rec.interimResults = true;
+      rec.lang = navigator.language || "en-US";
+      rec.onresult = (ev) => {
+        let interim = "";
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const t = ev.results[i][0].transcript;
+          if (ev.results[i].isFinal) finalText += t;
+          else interim += t;
+        }
+        // Show partial words as they are recognised — without this the panel looks frozen
+        // for the whole utterance and people click the mic again, cancelling themselves.
+        chatInput.value = (finalText + interim).trim();
+      };
+      rec.onerror = (ev) => {
+        // `no-speech` and `aborted` are ordinary outcomes, not failures worth a red message.
+        if (ev.error && ev.error !== "no-speech" && ev.error !== "aborted") {
+          appendMsg("system", "Mic: " + ev.error);
+        }
+        resetMic();
+      };
+      rec.onend = () => {
+        const text = finalText.trim();
+        resetMic();
+        if (text) { chatInput.value = text; sendChat(text); }
+      };
+      rec.start();
+      _localRec = rec;
+      return true;
+    } catch (e) {
+      console.warn("[Awconnect] local STT unavailable:", e);
+      return false;
+    }
+  }
 
   micBtn.addEventListener("click", () => {
+    // Browser path in flight — stop() fires onend, which is what sends the text.
+    if (_localRec) { try { _localRec.stop(); } catch (e) { resetMic(); } return; }
+
     if (_sttActive) {
       // Stop recording → transcribe
       _sttActive = false;
@@ -1625,12 +1764,18 @@
       return;
     }
 
-    // Start recording via offscreen document
+    // BROWSER FIRST. Only a browser with no SpeechRecognition at all records audio and
+    // ships it to the fleet, and that path stays purely optional.
     _sttActive = true;
-    micBtn.textContent = "\uD83D\uDD34";
+    micBtn.textContent = "������";
     micBtn.style.color = "#e55";
+    chatInput.placeholder = "Listening... click mic to stop";
+    if (startLocalStt()) {
+      console.log("[Awconnect] STT: browser SpeechRecognition (no fleet call)");
+      return;
+    }
     chatInput.placeholder = "Recording... click mic to stop";
-    console.log("[AitherConnect] Mic clicked — starting STT via offscreen");
+    console.log("[Awconnect] STT: no SpeechRecognition - falling back to offscreen + AitherVoice");
     chrome.runtime.sendMessage({ type: "stt-start" }, (resp) => {
       if (!resp?.ok) {
         appendMsg("system", "Mic failed: " + (resp?.error || "unknown"));
@@ -2636,6 +2781,13 @@
       onSessionUpdated(msg.session_id);
     }
 
+    // X daily summary broadcast (background alarms + manual refresh). Appends to
+    // the Events log live; a toast-opened panel pulls the cached copy on init
+    // and switches there instead (see sidepanel-ready).
+    if (msg.type === "x-daily-summary") {
+      renderXDailySummary(msg.summary, /*switchTo*/ false);
+    }
+
     // Panel switching (from popup or other sources)
     if (msg.type === "switch-panel" && msg.panel) {
       const tab = navTabs.querySelector(`[data-panel="${msg.panel}"]`);
@@ -2752,7 +2904,7 @@
             appendMsg("system", "Could not transcribe audio. Try speaking louder.");
           }
         } catch (e) {
-          console.warn("[AitherConnect] STT failed:", e);
+          console.warn("[Awconnect] STT failed:", e);
           appendMsg("system", "STT failed: " + e.message);
         }
         micBtn.textContent = "\uD83C\uDFA4"; // mic emoji
@@ -3260,7 +3412,7 @@ ${res.error}
              <code style="font-size:10px; background:var(--bg-tertiary); padding:2px 6px; border-radius:4px; display:block; margin:4px 0;">
                python -m aither_desktop.launcher
              </code>
-             Then click Launch again — AitherConnect will start it automatically.`,
+             Then click Launch again — Awconnect will start it automatically.`,
       actions: [
         {
           label: "📋 Copy install command",
@@ -3569,10 +3721,39 @@ ${res.error}
   ];
 
   // Apps contributed at runtime by installed EXTENSIONS (vertical packs like
-  // FormBridge). They appear ONLY when their pack is installed — AitherConnect
+  // FormBridge). They appear ONLY when their pack is installed — Awconnect
   // treats each pack as a pluggable extension, not a hardcoded tab. Their
   // `route` is an absolute URL (the extension serves its own UI locally).
   let DYNAMIC_APPS = [];
+
+  // Apps read from the PLATFORM REGISTRY for this tenant/workspace — genesis
+  // /apps/deployments (running here) + /apps/catalog (installable here). This is
+  // the authoritative list. AITHER_APPS above is a hand-maintained set of
+  // built-in Veil routes; on its own it could never show an app the owner
+  // actually deployed, nor hide one they never had, which is precisely why the
+  // grid looked arbitrary.
+  let TENANT_APPS = [];
+  // Never let "I couldn't ask the registry" render identically to "this tenant
+  // has no apps" — that is the silent fallback that made this invisible for
+  // weeks. `error` is surfaced in the grid.
+  let tenantAppsState = { loaded: false, error: null, degraded: false };
+
+  async function loadTenantApps() {
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: "list-tenant-apps" });
+      if (resp?.ok) {
+        TENANT_APPS = resp.apps || [];
+        tenantAppsState = { loaded: true, error: null, degraded: !!resp.degraded };
+      } else {
+        TENANT_APPS = [];
+        tenantAppsState = { loaded: true, error: resp?.error || "app registry unreachable", degraded: true };
+      }
+    } catch (e) {
+      TENANT_APPS = [];
+      tenantAppsState = { loaded: true, error: e.message, degraded: true };
+    }
+    renderApps();
+  }
 
   // Per-customer feature gating: a customer config (chrome.storage.local
   // "aither-disabled-extensions") can switch features off. This is the lever
@@ -3600,6 +3781,7 @@ ${res.error}
   };
 
   const appsGrid = $("apps-grid");
+  const appsNotice = $("apps-notice");
   const appsSearch = $("apps-search");
   const appsCategory = $("apps-category");
   const appsExperimental = $("apps-experimental");
@@ -3618,13 +3800,47 @@ ${res.error}
     // explicit search can still find a beta app.
     const showExperimental = !!(appsExperimental && appsExperimental.checked);
 
-    const filtered = [...AITHER_APPS, ...DYNAMIC_APPS].filter(app => isExtensionEnabled(app.id)).filter(app => {
+    // Registry apps lead — they are what this workspace actually has. A built-in
+    // Veil route with the same id is dropped rather than duplicated, and the
+    // registry's copy wins because it carries the real route/status.
+    const registryIds = new Set(TENANT_APPS.map(a => a.id));
+    const merged = [
+      ...TENANT_APPS,
+      ...[...AITHER_APPS, ...DYNAMIC_APPS].filter(a => !registryIds.has(a.id)),
+    ];
+
+    const filtered = merged.filter(app => isExtensionEnabled(app.id)).filter(app => {
       if (cat !== "all" && app.category !== cat) return false;
       if (query && !app.name.toLowerCase().includes(query) && !app.desc.toLowerCase().includes(query)) return false;
       // Hide beta apps unless experimental is on OR the user is actively searching.
       if (!showExperimental && !query && app.status === "beta") return false;
+      // Same treatment for registry apps with no real launch URL (AITHER_APPS
+      // built-ins always carry a route, so `app.route === undefined` only
+      // happens for a TENANT_APPS/catalog entry _normalizeTenantApp could not
+      // resolve to anything real). A grid full of cards that look installed and
+      // 404/refuse-to-connect on click is worse than a shorter, honest grid —
+      // "Experimental" or a search still surfaces them for troubleshooting.
+      if (!showExperimental && !query && !app.route) return false;
       return true;
     });
+
+    // Say out loud when the list is not the tenant's real one. Without this the
+    // grid renders a full, confident-looking set of built-in routes while the
+    // registry is unreachable — indistinguishable from a correct answer.
+    if (appsNotice) {
+      if (!tenantAppsState.loaded) {
+        appsNotice.style.display = "";
+        appsNotice.textContent = "Loading this workspace's apps…";
+      } else if (tenantAppsState.error) {
+        appsNotice.style.display = "";
+        appsNotice.textContent = `⚠ Showing built-in routes only — could not read this workspace's app registry (${tenantAppsState.error}).`;
+      } else if (tenantAppsState.degraded) {
+        appsNotice.style.display = "";
+        appsNotice.textContent = "⚠ Partial list — the app catalog did not answer; deployed apps are shown.";
+      } else {
+        appsNotice.style.display = "none";
+      }
+    }
 
     appsGrid.innerHTML = filtered.map(app => {
       const entitled = isAppEntitled(app);
@@ -3632,26 +3848,38 @@ ${res.error}
       // to render but can still be license-gated. Reflect /api/license off the
       // card data — no hardcoded entitlement.
       const licenseGated = !!(app.license && app.license.licensed === false);
-      const faded = !entitled || licenseGated;
-      const badgeHtml = licenseGated
-        ? `<span class="app-badge" style="background:#3a2f12;color:#eab308;">🔒 Activate</span>`
-        : !entitled
-          ? `<span class="app-badge" style="background:#3a2f12;color:#eab308;">Add-on</span>`
-          : app.agent
-            ? `<span class="app-badge agent">Agent</span>`
-            : app.status === "beta"
-              ? `<span class="app-badge beta">Beta</span>`
-              : "";
+      // No real route means this card would have failed silently on click
+      // ("localhost refused to connect" or a 404 on a guessed path) — that used
+      // to render identically to a working app. Say so instead of pretending.
+      const openable = !!app.route;
+      const faded = !entitled || licenseGated || !openable;
+      const badgeHtml = !openable
+        ? (app.localOnly
+            ? `<span class="app-badge" style="background:#1e2a1e;color:#6b7280;">Runs locally</span>`
+            : `<span class="app-badge" style="background:#2a1e1e;color:#6b7280;">Not launchable</span>`)
+        : licenseGated
+          ? `<span class="app-badge" style="background:#3a2f12;color:#eab308;">🔒 Activate</span>`
+          : !entitled
+            ? `<span class="app-badge" style="background:#3a2f12;color:#eab308;">Add-on</span>`
+            : app.agent
+              ? `<span class="app-badge agent">Agent</span>`
+              : app.status === "beta"
+                ? `<span class="app-badge beta">Beta</span>`
+                : "";
       const teaserStyle = faded ? ' style="opacity:0.4;"' : "";
       const lock = faded ? "🔒 " : "";
-      const title = licenseGated
-        ? `${escapeHtml(app.desc)} — activate at portal to enable`
-        : entitled
-          ? escapeHtml(app.desc)
-          : `${escapeHtml(app.desc)} — add-on (not enabled on your plan)`;
+      const title = !openable
+        ? (app.localOnly
+            ? `${escapeHtml(app.desc)} — runs on the owner's own machine (\`aither serve --workspace\`), not reachable from here`
+            : `${escapeHtml(app.desc)} — this workspace has no launch URL for it yet`)
+        : licenseGated
+          ? `${escapeHtml(app.desc)} — activate at portal to enable`
+          : entitled
+            ? escapeHtml(app.desc)
+            : `${escapeHtml(app.desc)} — add-on (not enabled on your plan)`;
       const portal = licenseGated ? (app.license.portal_url || "") : "";
       return `
-        <div class="app-card fade-in" data-route="${app.route}" data-name="${escapeHtml(app.name)}" data-entitled="${entitled ? 1 : 0}" data-license-gated="${licenseGated ? 1 : 0}" data-portal="${escapeHtml(portal)}" title="${title}"${teaserStyle}>
+        <div class="app-card fade-in" data-route="${escapeHtml(app.route || "")}" data-name="${escapeHtml(app.name)}" data-entitled="${entitled ? 1 : 0}" data-openable="${openable ? 1 : 0}" data-local-only="${app.localOnly ? 1 : 0}" data-license-gated="${licenseGated ? 1 : 0}" data-portal="${escapeHtml(portal)}" title="${title}"${teaserStyle}>
           ${badgeHtml}
           <span class="app-icon">${app.icon}</span>
           <span class="app-name">${lock}${escapeHtml(app.name)}</span>
@@ -3663,6 +3891,14 @@ ${res.error}
     appsGrid.querySelectorAll(".app-card").forEach(card => {
       card.addEventListener("click", () => {
         const name = card.dataset.name;
+        if (card.dataset.openable === "0") {
+          const msg = card.dataset.localOnly === "1"
+            ? `"${name}" runs on the owner's own machine via \`aither serve --workspace\` — it isn't reachable from here.`
+            : `"${name}" has no launch URL yet in this workspace.`;
+          addEvent("APP", `Cannot open "${name}": ${card.dataset.localOnly === "1" ? "local-only workspace" : "no launch URL"}`);
+          alert(msg);
+          return;
+        }
         if (card.dataset.entitled === "0") {
           addEvent("APP", `Add-on "${name}" is not enabled on this plan`);
           alert(`"${name}" is an add-on that isn't enabled on your plan.\nAsk your administrator to enable it.`);
@@ -4082,6 +4318,16 @@ ${res.error}
   }
 
   function renderMarketplace(items) {
+    /**
+     * Sanitize hex color for safe inline CSS use.
+     * Pattern: /^#[0-9a-fA-F]{3,8}$/ (allows #RGB, #RRGGBB, #RRGGBBAA)
+     */
+    function sanitizeHexColor(color) {
+      if (!color || typeof color !== 'string') return null;
+      const match = color.match(/^#[0-9a-fA-F]{3,8}$/);
+      return match ? color : null;
+    }
+
     marketplaceGrid.innerHTML = items.map((it, i) => {
       const tier = it.pricing?.tier || "free";
       const paid = tier !== "free";
@@ -4092,12 +4338,42 @@ ${res.error}
       const kindLabel = KIND_LABELS[it.kind] || it.kind;
       const method = it.install?.method || "";
       const cta = it.installed ? "Installed ✓" : (method === "git" ? "Open ↗" : (method === "adk" ? "Install" : "Details"));
+
+      // Extract branding and capabilities
+      const branding = it.branding || {};
+      const capabilities = it.capabilities || [];
+      const tagline = branding.tagline || "";
+      const primaryColor = sanitizeHexColor(branding.primary_color);
+
+      // Format capabilities as comma-separated list (text-safe)
+      const capabilitiesText = capabilities
+        .map(cap => cap.name)
+        .join(", ");
+
+      // Build optional branding elements
+      let brandingHtml = "";
+      if (tagline) {
+        if (primaryColor) {
+          // Accent-colored tagline chip
+          brandingHtml += `<div style="background:${primaryColor}; color:#fff; padding:4px 8px; border-radius:3px; font-size:10px; margin-top:4px; word-break:break-word;">${escapeHtml(tagline)}</div>`;
+        } else {
+          // Plain tagline text
+          brandingHtml += `<div style="font-size:10px; color:#9ca3af; margin-top:4px; font-style:italic;">${escapeHtml(tagline)}</div>`;
+        }
+      }
+
+      // Add capabilities list if present
+      if (capabilitiesText) {
+        brandingHtml += `<div style="font-size:9px; color:#6b7280; margin-top:3px;">Capabilities: ${escapeHtml(capabilitiesText)}</div>`;
+      }
+
       return `
         <div class="app-card fade-in" data-mkt-idx="${i}" title="${escapeHtml(it.summary || it.name)}">
           <span class="app-badge" style="background:#2a2a3a;color:#9ca3af;">${escapeHtml(kindLabel)}</span>
           <span class="app-icon">${it.kind === "agent_pack" ? "🤖" : it.kind === "skill_pack" ? "✨" : it.kind === "tool_pack" ? "🧰" : it.kind === "extension" ? "🧩" : "📦"}</span>
           <span class="app-name">${escapeHtml(it.name)}</span>
           <span class="app-desc">${escapeHtml((it.summary || "").slice(0, 90))}</span>
+          ${brandingHtml}
           <div style="display:flex; gap:6px; align-items:center; margin-top:6px; width:100%;">
             <span style="font-size:10px; color:${gated ? "#eab308" : "#22c55e"};">${gated ? "🔒 " : ""}${escapeHtml(price)}</span>
             <button class="np-btn mkt-install" data-mkt-idx="${i}"${it.installed ? " disabled" : ""} style="margin-left:auto; font-size:11px; padding:3px 10px;${it.installed ? "opacity:0.6;" : ""}">${cta}</button>
@@ -4295,8 +4571,23 @@ ${res.error}
     }
   });
 
-  // Initial render
+  // Initial render, then replace the built-in placeholder set with this
+  // workspace's real apps as soon as the registry answers.
   renderApps();
+  loadTenantApps();
+
+  // The registry is scoped by tenant/workspace headers, so a list fetched before
+  // identity resolved belongs to nobody. Re-fetch when the scope changes —
+  // otherwise the owner signs in, the badge fills in, and the grid keeps showing
+  // the pre-login answer until the panel is closed and reopened.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "sync" || !changes["aither-settings"]) return;
+    const before = changes["aither-settings"].oldValue || {};
+    const after = changes["aither-settings"].newValue || {};
+    if (before.tenantId !== after.tenantId || before.workspaceId !== after.workspaceId) {
+      loadTenantApps();
+    }
+  });
 
   // ====================================================================
   // UTILITIES
@@ -4597,7 +4888,7 @@ ${res.error}
     const serviceGroups = [
       { label: "Core", ids: ["genesis", "veil", "node", "pulse"] },
       { label: "Intelligence", ids: ["mind", "lyra", "nexus", "search", "strata"] },
-      { label: "Inference", ids: ["vllm", "ollama"] },
+      { label: "Inference", ids: ["bonsai", "vllm", "ollama"] },
       { label: "External", ids: ["portal"] },
     ];
     let svcHTML = "";
@@ -4646,16 +4937,16 @@ ${res.error}
     const _isBroken = (svc) => svc?.status === "down" || svc?.status === "error";
 
     if (_isBroken(svcMap.node)) {
-      actions.push({ icon: "🔌", label: "Install AitherNode (MCP tools)", hint: "pip install aither-node", cmd: "pip install aither-node && aither-node serve" });
+      actions.push({ icon: "🔌", label: "Install awnode (MCP tools)", hint: "pip install aither-node", cmd: "pip install aither-node && aither-node serve" });
     }
     if (_isBroken(svcMap.genesis)) {
       actions.push({ icon: "🧠", label: "Start AitherOS services", hint: "npm start", cmd: "cd AitherOS && npm start" });
     }
-    if (!_isRunning(svcMap.ollama) && !_isRunning(svcMap.vllm)) {
-      actions.push({ icon: "🤖", label: "Install Ollama (local inference)", hint: "ollama.com/download", url: "https://ollama.com/download" });
-    }
-    if (_isRunning(svcMap.ollama) && _isBroken(svcMap.vllm)) {
-      actions.push({ icon: "📦", label: "Pull a model", hint: "ollama pull llama3.2", cmd: "ollama pull llama3.2" });
+    // This platform's local-inference lane is llama.cpp (Bonsai via the node
+    // proxy) + vLLM/MicroScheduler — never advise installing Ollama, which we
+    // neither ship nor deploy (owner, 2026-08-09).
+    if (!_isRunning(svcMap.bonsai) && !_isRunning(svcMap.vllm)) {
+      actions.push({ icon: "🤖", label: "Enable local inference (awnode)", hint: "pip install aither-node", cmd: "pip install aither-node && aither-node serve" });
     }
     actions.push({ icon: "💻", label: "Install AitherShell", hint: "pip install aithershell", cmd: "pip install aithershell" });
     if (!env.settings.remoteUrl) {
@@ -4775,8 +5066,13 @@ ${res.error}
         || (s.tenantId || "").replace(/^tnt_/, "")
         || s.workspaceId || "";
       if (currentSlug) scopeSet.add(currentSlug);
-      const scopeList = [...scopeSet];
-      if (scopeList.length > 1 && !scopeList.includes("*")) {
+      // `allowed: ["*"]` is the super_admin sentinel — it must NOT hide the
+      // switcher. david owns `aitherium` as a dogfood tenant (owns_tenants) and
+      // wants to operate as it; without this the * drowned the list and the
+      // dropdown never rendered for exactly the user who needs it.
+      const scopeList = [...scopeSet].filter(sl => sl && sl !== "*");
+      const ownsList = ((env.scopes && env.scopes.owns) || []).filter(sl => sl && sl !== "*");
+      if (scopeList.length > 1 || ownsList.length > 1) {
         const opts = scopeList.map(sl =>
           `<option value="${escapeHtml(sl)}"${sl === currentSlug ? " selected" : ""}>${escapeHtml(sl)}</option>`
         ).join("");
@@ -4859,12 +5155,21 @@ ${res.error}
     // Load workspace/tenant context badge
     await loadWorkspaceContext();
 
-    // Auto-resolve identity if not configured
+    // Auto-resolve identity whenever the scope is INCOMPLETE.
+    //
+    // This guard used to read `if (!settings.tenantId && !settings.userId)`,
+    // which disagrees with what the badge above actually requires
+    // (`tenantId || workspaceId`). The gap between the two is a real, reachable
+    // state — a userId with no tenant and no workspace — and in it the guard
+    // says "configured, skip" while the badge says "no workspace". Nothing ever
+    // escaped it except a manual click on Sign in. Ask for what the badge needs.
     try {
       const settings = (await chrome.runtime.sendMessage({ type: "get-settings" }))?.settings || {};
-      if (!settings.tenantId && !settings.userId) {
+      if (!settings.tenantId || !settings.workspaceId || !settings.userId) {
         const result = await chrome.runtime.sendMessage({ type: "resolve-identity" });
-        if (result?.ok && result.identity) {
+        // `unverified` means "we kept your cached identity because the verifier
+        // was unreachable" — re-applying it would just write the blanks back.
+        if (result?.ok && result.identity && !result.unverified) {
           await chrome.runtime.sendMessage({ type: "apply-identity", identity: result.identity, token: result.token });
           addEvent("AUTH", `Auto-detected: ${result.identity.username} (${result.identity.tenant_slug || result.identity.tenant_id})`);
           await loadWorkspaceContext();
@@ -4874,12 +5179,12 @@ ${res.error}
 
     const ok = await checkConnection();
     if (ok) {
-      addEvent('INIT', 'AitherConnect initialized \u2014 connected');
+      addEvent('INIT', 'Awconnect initialized \u2014 connected');
       kbRefresh();  // Load knowledge base plugins
       checkEndpointStatus();  // Show local + portal status
       loadTools();  // Pre-load MCP tools
     } else {
-      addEvent('INIT', 'AitherConnect initialized \u2014 offline');
+      addEvent('INIT', 'Awconnect initialized \u2014 offline');
       checkEndpointStatus();  // Still show what's reachable
     }
 
@@ -4887,8 +5192,29 @@ ${res.error}
     setInterval(checkConnection, 15000);
     setInterval(checkEndpointStatus, 60000);  // Refresh endpoint status every 60s
 
-    // Tell background we're ready — pick up any queued text actions
-    chrome.runtime.sendMessage({ type: "sidepanel-ready" }).catch(() => {});
+    // Tell background we're ready — pick up any queued text actions and, if the
+    // panel was opened from an X-stats toast click, the cached daily summary.
+    chrome.runtime.sendMessage({ type: "sidepanel-ready" }).then((res) => {
+      if (res && res.xDailySummary) renderXDailySummary(res.xDailySummary, /*switchTo*/ true);
+    }).catch(() => {});
+  }
+
+  // Render an X daily summary onto the Events panel. `switchTo` jumps the nav
+  // there so a toast-opened panel lands on the stats, not the default Chat view.
+  function renderXDailySummary(summary, switchTo) {
+    if (!summary) return;
+    const lines = [];
+    if (summary.posts) lines.push(`${summary.posts} post(s)`);
+    if (summary.likes) lines.push(`${summary.likes} like(s)`);
+    if (summary.replies) lines.push(`${summary.replies} reply/reposts`);
+    if (summary.follows) lines.push(`${summary.follows} follow(s)`);
+    if (summary.followers) lines.push(`${summary.followers} follower(s)`);
+    const detail = summary.detail || summary.text || lines.join(" · ") || "X summary";
+    addEvent("X", detail);
+    if (switchTo) {
+      const tab = navTabs.querySelector('[data-panel="events"]');
+      if (tab) tab.click();
+    }
   }
 
   // ====================================================================
@@ -5087,6 +5413,118 @@ ${res.error}
       }
     });
   }
+
+  // ========================================================================
+  // DECISIONS PANEL — pending decisions from the harness daemon
+  // ========================================================================
+
+  async function loadDecisionsPanel() {
+    if (!self.HarnessAuth) return;
+    const container = $("decisions-container");
+    if (!container) return;
+
+    container.innerHTML = '<div class="decisions-loading">Loading decisions...</div>';
+
+    try {
+      const result = await self.HarnessAuth.listDecisions("open");
+      if (!result || !result.decisions) {
+        container.innerHTML = '<div class="decisions-empty">No pending decisions.</div>';
+        return;
+      }
+
+      const decisions = result.decisions;
+      if (decisions.length === 0) {
+        container.innerHTML = '<div class="decisions-empty">No pending decisions. Good to go!</div>';
+        return;
+      }
+
+      container.innerHTML = "";
+      decisions.forEach((card) => {
+        const cardEl = renderDecisionCard(card);
+        container.appendChild(cardEl);
+      });
+    } catch (e) {
+      console.error("[Sidepanel] Error loading decisions:", e);
+      container.innerHTML = '<div class="decisions-empty">Error loading decisions. Check your connection.</div>';
+    }
+  }
+
+  function renderDecisionCard(card) {
+    const cardEl = document.createElement("div");
+    cardEl.className = "decision-card";
+    if (card.urgency && ["critical", "high"].includes(card.urgency)) {
+      cardEl.classList.add("urgent");
+    }
+
+    const ageSeconds = card.age_seconds || 0;
+    const ageLabel = ageSeconds < 60
+      ? `just now`
+      : ageSeconds < 3600
+      ? `${Math.floor(ageSeconds / 60)}m ago`
+      : `${Math.floor(ageSeconds / 3600)}h ago`;
+
+    const urgencyBadge = card.urgency ? `<span class="decision-card-urgency ${card.urgency}">${card.urgency}</span>` : "";
+
+    cardEl.innerHTML = `
+      <div class="decision-card-header">
+        <div class="decision-card-title">${esc(card.title || "Decision")}</div>
+        ${urgencyBadge}
+      </div>
+      <div class="decision-card-age">${ageLabel}</div>
+      ${card.description ? `<div style="font-size:11px; color:var(--text-secondary); margin-bottom:8px;">${esc(card.description || "")}</div>` : ""}
+      <div class="decision-card-options"></div>
+    `;
+
+    const optionsEl = cardEl.querySelector(".decision-card-options");
+    if (card.options && Array.isArray(card.options)) {
+      card.options.forEach((opt) => {
+        const btn = document.createElement("button");
+        btn.className = "decision-option-btn";
+        if (opt.recommended) btn.classList.add("recommended");
+        btn.textContent = esc(opt.label || opt.key || "");
+        btn.dataset.cardId = card.id;
+        btn.dataset.choice = opt.key;
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          submitDecisionAnswer(card.id, opt.key, opt.label);
+        });
+        optionsEl.appendChild(btn);
+      });
+    }
+
+    return cardEl;
+  }
+
+  async function submitDecisionAnswer(cardId, choice, label = "") {
+    if (!self.HarnessAuth) return;
+
+    try {
+      const result = await self.HarnessAuth.answerDecision(cardId, choice, "", "awconnect");
+      if (result.status === "already_answered") {
+        addEvent("DECISION", `Card ${cardId.slice(0, 8)} already answered`);
+        await loadDecisionsPanel();
+        return;
+      }
+      if (result.status === "error") {
+        addEvent("DECISION", `Error answering card: ${result.error}`);
+        return;
+      }
+      addEvent("DECISION", `✓ Answered: ${esc(label || choice)}`);
+      await loadDecisionsPanel();
+    } catch (e) {
+      console.error("[Sidepanel] Error submitting decision:", e);
+      addEvent("DECISION", `Failed to submit answer: ${e.message}`);
+    }
+  }
+
+  // Listen for decision count updates from background.js
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === "decisions-count-update") {
+      if ($("nav-tabs").querySelector('[data-panel="decisions"].active')) {
+        loadDecisionsPanel().catch(() => {});
+      }
+    }
+  });
 
   // ── Helper ──
   function esc(s) { return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }

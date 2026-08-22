@@ -1,11 +1,11 @@
 /**
- * AitherConnect Tier Detection
+ * Awconnect Tier Detection
  * ============================
  * Shared utility for detecting which connectivity tier is available.
  *
  * Tiers (in priority order):
  *   1. "genesis"   — Full AitherOS via Veil bridge proxy
- *   2. "node-only" — AitherNode standalone (HTTP, no TLS issues)
+ *   2. "node-only" — awnode standalone (HTTP, no TLS issues)
  *   3. "provider"  — BYOK: user-configured LLM provider (Anthropic/OpenAI/
  *                    OpenRouter/Ollama/Gemini), chat + local KB only
  *   4. "cloud-only"— Cloud gateway with API key
@@ -229,7 +229,7 @@ const TierDetect = {
       };
     }
 
-    // 2. AitherNode direct HTTP (standalone, no Docker TLS issue)
+    // 2. awnode direct HTTP (standalone, no Docker TLS issue)
     if (await this.probe(`http://${lo}:${node}/health`)) {
       return {
         tier: "node-only",

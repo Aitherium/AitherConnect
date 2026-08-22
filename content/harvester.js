@@ -1,4 +1,4 @@
-// AitherConnect — Auto-harvester (runs on all pages)
+// Awconnect — Auto-harvester (runs on all pages)
 // Captures page content for knowledge base ingestion when enabled.
 (function() {
   function harvest() {

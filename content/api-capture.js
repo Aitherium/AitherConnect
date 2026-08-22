@@ -1,5 +1,5 @@
 /**
- * AitherConnect — FormBridge API Capture (isolated world, relay to service worker).
+ * Awconnect — FormBridge API Capture (isolated world, relay to service worker).
  *
  * Listens for {__aitherApi:'response'} messages from the MAIN world (api-capture-net.js),
  * collects them, and forwards to the service worker via chrome.runtime.sendMessage.

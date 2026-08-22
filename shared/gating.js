@@ -1,5 +1,5 @@
 /**
- * Feature gating and quota enforcement for AitherConnect tiers.
+ * Feature gating and quota enforcement for Awconnect tiers.
  *
  * Defines free vs pro/trial feature availability and knowledge base quotas.
  * Storage:

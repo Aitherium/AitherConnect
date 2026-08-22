@@ -7,7 +7,7 @@
  * where mcpUrl is stored but completely ignored.
  *
  * This test mocks fetch and verifies:
- * 1. With AitherNode down, the discovery code tries mcpUrl
+ * 1. With awnode down, the discovery code tries mcpUrl
  * 2. Changing mcpUrl changes which URL gets fetched
  * 3. A 401 from mcpUrl reports "unauthenticated" distinctly
  * 4. The fallback tier-based approach is used only if mcpUrl isn't configured
@@ -125,7 +125,7 @@ const createFetchJsonWrapper = () => {
 };
 
 /**
- * Simulate the MCP discovery logic: try AitherNode, then mcpUrl, then tier-based.
+ * Simulate the MCP discovery logic: try awnode, then mcpUrl, then tier-based.
  * This extracts the core logic to test it in isolation.
  */
 const mockMcpDiscovery = async (settings) => {
@@ -144,12 +144,12 @@ const mockMcpDiscovery = async (settings) => {
     inputSchema: t.inputSchema || t.input_schema || {},
   }));
 
-  // Try AitherNode
+  // Try awnode
   const nodeBase = `http://${LOOPBACK}:${SETTINGS.nodePort || 8090}`;
   try {
-    const result = await fetchJson(`${nodeBase}/mcp/tools`, {}, 20000, "AitherNode");
+    const result = await fetchJson(`${nodeBase}/mcp/tools`, {}, 20000, "awnode");
     if (result.ok && result.data?.tools?.length) {
-      return { ok: true, tools: mapTools(result.data.tools), source: "aithernode" };
+      return { ok: true, tools: mapTools(result.data.tools), source: "awnode" };
     }
   } catch (_nodeErr) {
     // Fall through
@@ -187,7 +187,7 @@ const mockMcpDiscovery = async (settings) => {
 // Tests
 // =============================================================================
 
-test("With AitherNode down, discovery tries configured SETTINGS.mcpUrl", async () => {
+test("With awnode down, discovery tries configured SETTINGS.mcpUrl", async () => {
   capturedFetchCalls.length = 0;
 
   storageSync.set("aither-settings", {
@@ -197,7 +197,7 @@ test("With AitherNode down, discovery tries configured SETTINGS.mcpUrl", async (
 
   const settings = storageSync.get("aither-settings");
 
-  // Simulate: AitherNode returns 404
+  // Simulate: awnode returns 404
   nextFetchResponse = { ok: false, status: 404 };
   await mockMcpDiscovery(settings);
 
@@ -205,7 +205,7 @@ test("With AitherNode down, discovery tries configured SETTINGS.mcpUrl", async (
   const urls = capturedFetchCalls.map(c => c.url);
   console.log("URLs tried:", urls);
 
-  assert(urls.includes("http://127.0.0.1:8090/mcp/tools"), "Should try AitherNode");
+  assert(urls.includes("http://127.0.0.1:8090/mcp/tools"), "Should try awnode");
   assert(urls.includes("https://custom-mcp.example.com/mcp"), "Should try configured mcpUrl");
 });
 
@@ -219,7 +219,7 @@ test("Changing SETTINGS.mcpUrl changes which URL gets fetched", async () => {
   });
 
   let settings = storageSync.get("aither-settings");
-  nextFetchResponse = { ok: false, status: 404 }; // AitherNode fails
+  nextFetchResponse = { ok: false, status: 404 }; // awnode fails
   await mockMcpDiscovery(settings);
 
   const firstRun = capturedFetchCalls.filter(c => c.url.includes("endpoint"));
@@ -265,7 +265,7 @@ test("A 401 from mcpUrl is reported distinctly as 'unauthenticated'", async () =
 
   const settings = storageSync.get("aither-settings");
 
-  // AitherNode: not found
+  // awnode: not found
   nextFetchResponse = { ok: false, status: 404 };
   const result = await mockMcpDiscovery(settings);
 
@@ -290,7 +290,7 @@ test("Without mcpUrl configured, falls back to tier-based discovery (genesis)", 
 
   const settings = storageSync.get("aither-settings");
 
-  // AitherNode: not found
+  // awnode: not found
   nextFetchResponse = { ok: false, status: 404 };
   await mockMcpDiscovery(settings);
 
@@ -298,7 +298,7 @@ test("Without mcpUrl configured, falls back to tier-based discovery (genesis)", 
   console.log("URLs tried (no mcpUrl):", urls);
 
   // Should skip the mcpUrl attempt and go straight to genesis tier
-  assert(urls.includes("http://127.0.0.1:8090/mcp/tools"), "Should try AitherNode");
+  assert(urls.includes("http://127.0.0.1:8090/mcp/tools"), "Should try awnode");
   assert(
     urls.includes("http://localhost:8001/api/tools"),
     "Should fall back to Genesis tier",
@@ -319,7 +319,7 @@ test("Successful mcpUrl response returns tools and source", async () => {
 
   const settings = storageSync.get("aither-settings");
 
-  // AitherNode: not found
+  // awnode: not found
   nextFetchResponse = { ok: false, status: 404 };
   await mockMcpDiscovery(settings);
 

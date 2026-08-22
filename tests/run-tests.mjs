@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AitherConnect Shared Modules Test Suite
+ * Awconnect Shared Modules Test Suite
  * Runs ~50+ assertions across all 8 modules
  */
 
@@ -219,7 +219,7 @@ new Function(traceEventsCode + '; globalThis.describeTraceEvent = describeTraceE
 const kbDbCode = fs.readFileSync(path.join(sharedDir, 'kb-db.js'), 'utf8');
 new Function(kbDbCode)();
 
-// Load the AitherBrowser bridge — declares const AitherBrowserBridge (D-922)
+// Load the AitherBrowser bridge — declares const AitherBrowserBridge
 const browserBridgeCode = fs.readFileSync(path.join(sharedDir, 'aitherbrowser.js'), 'utf8');
 new Function(browserBridgeCode
   + '; globalThis.AitherBrowserBridge = AitherBrowserBridge;')();
@@ -571,7 +571,7 @@ test('license: verifyLicense with valid REAL Ed25519 envelope', async () => {
   const keyPair = nacl.sign.keyPair();
   const payload = {
     v: 1,
-    product: 'aitherconnect',
+    product: 'awconnect',
     tier: 'pro',
     email: 'test@example.com',
     iat: Math.floor(Date.now() / 1000),
@@ -608,7 +608,7 @@ test('license: verifyLicense with tampered payload fails', async () => {
   const keyPair = nacl.sign.keyPair();
   const payload = {
     v: 1,
-    product: 'aitherconnect',
+    product: 'awconnect',
     tier: 'pro',
     email: 'test@example.com',
     iat: Math.floor(Date.now() / 1000),
@@ -651,7 +651,7 @@ test('license: verifyLicense expired but in grace period', async () => {
   const expiredSecs = Math.floor((now - 86400000) / 1000); // 1 day ago
   const payload = {
     v: 1,
-    product: 'aitherconnect',
+    product: 'awconnect',
     tier: 'pro',
     email: 'test@example.com',
     iat: expiredSecs - 86400,
@@ -690,7 +690,7 @@ test('license: verifyLicense expired beyond grace fails', async () => {
   const expiredSecs = Math.floor((now - 10 * 86400000) / 1000); // 10 days ago
   const payload = {
     v: 1,
-    product: 'aitherconnect',
+    product: 'awconnect',
     tier: 'pro',
     email: 'test@example.com',
     iat: expiredSecs - 86400,
@@ -746,7 +746,7 @@ test('license: verifyLicense wrong product fails', async () => {
   });
 
   assert(!result.ok);
-  assert(result.reason.includes('not for aitherconnect'));
+  assert(result.reason.includes('not for awconnect'));
 });
 
 test('license: garbage envelope fails closed to free tier', async () => {
@@ -816,7 +816,7 @@ test('tier-detect: capabilitiesFor("genesis") has all features', () => {
 });
 
 // AitherBrowser (server-side capture/crawl) rides the Veil bridge in genesis tier
-// and the AitherNode proxy plane in node tier; it is unreachable in cloud/provider/
+// and the awnode proxy plane in node tier; it is unreachable in cloud/provider/
 // offline, where BROWSER_URL is "". The sidepanel's crawl button gates on this flag,
 // so a missing or wrong value silently hides (or falsely offers) the feature.
 test('tier-detect: hasHeadlessBrowser is defined for EVERY tier', () => {
@@ -1032,7 +1032,7 @@ test('trace: a progress event WITH a message renders that message', () => {
 });
 
 test('trace: a completion event with NO message still renders (this is the bug)', () => {
-  // Exactly the shape genesis emits after the D-874 fix.
+  // Exactly the shape genesis emits after the platform-side fix for this class.
   const l = describeTraceEvent('progress', {
     stage: 'emotional_context', phase: 'affect_complete', elapsed_ms: 547.3, degraded: null,
   });
@@ -1336,7 +1336,7 @@ if (hasIndexedDB) {
 }
 
 // ============================================================================
-// AitherBrowser bridge (D-922) — extracted from background.js so it can be
+// AitherBrowser bridge — extracted from background.js so it can be
 // tested at all. Before the extraction these paths had `node --check` only.
 // ============================================================================
 
@@ -1442,7 +1442,7 @@ test('aitherbrowser: ingestPages tolerates a missing pages array', async () => {
 });
 
 // ============================================================================
-// AitherConnect Options Settings Completeness Tests
+// Awconnect Options Settings Completeness Tests
 // ============================================================================
 
 section('options: settings completeness');
@@ -1524,6 +1524,110 @@ test('options: all DEFAULT_SETTINGS fields are in readForm()', () => {
     unexpectedMissing.length, 0,
     `DEFAULT_SETTINGS fields missing from readForm(): ${unexpectedMissing.join(', ')}`
   );
+});
+
+// ============================================================================
+// Apps grid: icon resolution and route normalization
+//
+// The Apps grid rendered mostly generic green puzzle-piece icons and most
+// tiles failed with "localhost refused to connect" on click (reported live
+// 2026-08-19). Root causes, both fixed here:
+//   1. _APP_ICON_BY_NAME covered 20 names picked without checking the real
+//      catalog, matching only 4 of 18 actual app manifests.
+//   2. _normalizeTenantApp synthesized a fake `/apps/<slug>` route whenever
+//      the registry had nothing better, so a card looked identical whether
+//      or not it could actually open.
+// These functions are pure (no chrome.* calls), so they're extracted and
+// EXECUTED here rather than pattern-matched — a text-presence check would
+// pass even if the mapping were wrong.
+// ============================================================================
+
+function loadAppsGridFunctions() {
+  const bgJs = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+  const match = bgJs.match(
+    /const _APP_ICON_BY_NAME = \{[\s\S]*?\nfunction _normalizeTenantApp\(raw, installed\) \{[\s\S]*?\n\}\n/
+  );
+  assert.ok(match, 'Could not find _APP_ICON_BY_NAME.._normalizeTenantApp block in background.js');
+  const sandbox = {};
+  new Function('sandbox', match[0] + '; sandbox._appIcon = _appIcon; sandbox._normalizeTenantApp = _normalizeTenantApp;')(sandbox);
+  return sandbox;
+}
+
+test('apps-grid: every real manifest icon name resolves to a real glyph, not the puzzle fallback', () => {
+  const { _appIcon } = loadAppsGridFunctions();
+  // Copied verbatim from the platform's real app-manifest catalog (grepped the
+  // icon field across every manifest) — re-derive that list if a new manifest
+  // is added and this test starts failing.
+  const realIconNames = [
+    'archive', 'bar-chart-3', 'book-open', 'book-text', 'bot', 'box', 'brain',
+    'briefcase', 'calculator', 'camera', 'castle', 'code', 'code-2', 'compass',
+    'cpu', 'credit-card', 'crown', 'database', 'eye', 'file-text', 'film',
+    'fingerprint', 'flask-conical', 'git-branch', 'graduation-cap', 'grid',
+    'hard-drive', 'hard-hat', 'image', 'key-round', 'landmark', 'leaf',
+    'library', 'link', 'lock', 'mail', 'megaphone', 'mic', 'network',
+    'palette', 'scan-eye', 'search', 'server', 'settings', 'shield',
+    'shield-check', 'shopping-bag', 'sparkles', 'star', 'store', 'terminal',
+    'users', 'zap',
+  ];
+  // installed:false so the fallback is unambiguously 🧩 — "box" legitimately
+  // maps to 📦, which collides with the installed:true fallback glyph and
+  // would otherwise misreport a correct mapping as missing.
+  const unmapped = realIconNames.filter(name => _appIcon({ icon: name }, false) === '🧩');
+  assert.strictEqual(
+    unmapped.length, 0,
+    `these real icon names still fall through to the generic fallback: ${unmapped.join(', ')}`
+  );
+});
+
+test('apps-grid: _appIcon still falls back to the puzzle piece for a genuinely unknown name', () => {
+  const { _appIcon } = loadAppsGridFunctions();
+  assert.strictEqual(_appIcon({ icon: 'not-a-real-lucide-name-xyz' }, false), '🧩');
+  assert.strictEqual(_appIcon({ icon: 'not-a-real-lucide-name-xyz' }, true), '📦');
+  assert.strictEqual(_appIcon({}, false), '🧩', 'no icon field at all must still fall back, not throw');
+});
+
+test('apps-grid: _normalizeTenantApp prefers subdomain_url over endpoint_url', () => {
+  const { _normalizeTenantApp } = loadAppsGridFunctions();
+  // This is the field that was never read before: genesis sets it from
+  // manifest.subdomain to the product's own dedicated domain
+  // (tenant_apps.py), which is more reliable than the generic portal-relative
+  // endpoint_url — but the old priority chain ranked endpoint_url first.
+  const app = _normalizeTenantApp({
+    slug: 'gargbot',
+    display_name: 'GargBot Professional',
+    subdomain_url: 'https://garg.aitherium.com',
+    endpoint_url: 'https://portal.aitherium.com/apps/gargbot',
+    veil_route: null,
+  }, true);
+  assert.strictEqual(app.route, 'https://garg.aitherium.com');
+});
+
+test('apps-grid: _normalizeTenantApp falls back through veil_route then endpoint_url', () => {
+  const { _normalizeTenantApp } = loadAppsGridFunctions();
+  const embedded = _normalizeTenantApp({
+    slug: 'demi', veil_route: '/demi', endpoint_url: 'https://portal.aitherium.com/apps/demi',
+  }, true);
+  assert.strictEqual(embedded.route, '/demi');
+
+  const portalOnly = _normalizeTenantApp({
+    slug: 'shop', endpoint_url: 'https://portal.aitherium.com/apps/shop',
+  }, true);
+  assert.strictEqual(portalOnly.route, 'https://portal.aitherium.com/apps/shop');
+});
+
+test('apps-grid: _normalizeTenantApp returns route:null (not a fake synthesized path) when the registry has nothing real', () => {
+  const { _normalizeTenantApp } = loadAppsGridFunctions();
+  // This is the "Aitherium HQ" shape live 2026-08-19: deployment_mode:"local",
+  // no veil_route in its manifest, and — depending on the record — no
+  // endpoint_url either. The OLD code synthesized `/apps/aitherium` here,
+  // which the side panel then opened as http://localhost:<veilPort>/apps/
+  // aitherium on a remote session: "localhost refused to connect", with no
+  // way for the grid to tell this apart from a working app.
+  const app = _normalizeTenantApp({
+    slug: 'aitherium', display_name: 'Aitherium HQ', deployment_mode: 'local',
+  }, true);
+  assert.strictEqual(app.route, null, 'a registry entry with no real URL must not synthesize one');
+  assert.strictEqual(app.localOnly, true);
 });
 
 test('options: populateForm populates all settings fields from object', () => {

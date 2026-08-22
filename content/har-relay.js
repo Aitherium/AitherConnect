@@ -1,5 +1,5 @@
 /**
- * AitherConnect — HAR Recorder relay (ISOLATED world).
+ * Awconnect — HAR Recorder relay (ISOLATED world).
  *
  * The recorder (har-recorder.js) runs in the page's MAIN world and cannot reach
  * chrome.runtime. This isolated-world companion listens for its window messages

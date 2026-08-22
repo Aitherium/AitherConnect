@@ -1,5 +1,5 @@
 // GitHub Harvester
-console.log("[AitherConnect] GitHub module loaded");
+console.log("[Awconnect] GitHub module loaded");
 
 function scrapeGitHub() {
     let source = "github";

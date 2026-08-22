@@ -1,4 +1,4 @@
-// AitherConnect — LinkedIn on-page agent + control panel.
+// Awconnect — LinkedIn on-page agent + control panel.
 // Runs as a content script ON linkedin.com, so the DOM automation lives here in
 // the page (not in the service worker). Aither's brain (compose + engagement
 // decisions) is asked over messages to the background; the clicking/typing
@@ -105,7 +105,14 @@
     const feed = readFeed(15);
     if (!feed.length) return "No feed posts found";
     const p = await ask({ type: "social-engage-plan", feed });
-    const plan = (p && p.plan) || { likes: feed.slice(0, 2).map((x) => x.idx), reply: null };
+    // NO BLIND FALLBACK — see the same rule in aither-command-bar.js. Liking the
+    // first two posts in view because no model answered is an unjudged action on
+    // the owner's real account, and it makes a brain outage read as a working
+    // loop. (This file is legacy — the command bar supersedes it and sets
+    // `window.__aitherLiAgent` to suppress it — but it is still on disk and
+    // still injectable, so it does not get to keep the defect.)
+    const plan = p && p.plan;
+    if (!plan) return "Skipped — Aither's brain isn't reachable (no fallbacks). Engaged nothing.";
     const done = await doEngage(plan);
     await ask({ type: "social-log", platform: "linkedin", entry: { type: "engage", liked: done.liked, replied: done.replied ? 1 : 0 } });
     return `Liked ${done.liked}${done.replied ? " + comment" : ""}`;

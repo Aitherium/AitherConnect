@@ -1,5 +1,5 @@
 /**
- * AitherConnect Options Page
+ * Awconnect Options Page
  * ===========================
  * Loads/saves connection settings via the background worker's
  * get-settings / save-settings / reset-settings messages.
@@ -14,7 +14,7 @@
  * DEVICE-LOCAL (never synced):
  *   - apiKey, cloudApiKey (credentials stay on-device)
  *   - baseUrl, genesisPort, veilPort, mindPort, pulsePort, strataPort,
- *     searchPort, nexusPort, canvasPort, nodePort (per-machine ports)
+ *     searchPort, nexusPort, canvasPort, bonsaiPort, nodePort (per-machine ports)
  *   - autoHarvest, ragEnabled (device-specific behaviors)
  *   - remoteUrl (per-device override; cloudGatewayUrl is the portal-synced default)
  *
@@ -48,7 +48,7 @@ const FIELD_CLASSIFICATION = {
   // Device-specific settings (never sync — ports, credentials, device behavior)
   DEVICE_LOCAL: new Set([
     'baseUrl', 'genesisPort', 'veilPort', 'mindPort', 'pulsePort', 'strataPort',
-    'searchPort', 'nexusPort', 'canvasPort', 'remoteUrl', 'nodePort',
+    'searchPort', 'nexusPort', 'canvasPort', 'bonsaiPort', 'remoteUrl', 'nodePort',
     'apiKey', 'cloudApiKey', 'autoHarvest', 'ragEnabled',
     'providerApiKey', // CRITICAL: API key NEVER syncs
   ]),
@@ -223,6 +223,7 @@ async function populateForm(settings) {
   $("searchPort").value = mergedSettings.searchPort || 8114;
   $("nexusPort").value = mergedSettings.nexusPort || 8122;
   $("canvasPort").value = mergedSettings.canvasPort || 8108;
+  $("bonsaiPort").value = mergedSettings.bonsaiPort || 8798;
   $("remoteUrl").value = mergedSettings.remoteUrl || "";
   $("apiKey").value = mergedSettings.apiKey || "";
   $("relayUrl").value = mergedSettings.relayUrl || "https://irc.aitherium.com";
@@ -236,6 +237,10 @@ async function populateForm(settings) {
   $("workspaceKnowledge").checked = mergedSettings.workspaceKnowledge !== false;
   $("textActionsAllSites").checked = !!mergedSettings.textActionsAllSites;
   $("ragEnabled").checked = mergedSettings.ragEnabled !== false;
+  // On-page injection. Both default-read with `!== false` so an unset value
+  // shows the shipped default rather than an unchecked box that lies about it.
+  $("commandBarEnabled").checked = mergedSettings.commandBarEnabled !== false;
+  $("osOverlayEnabled").checked = !!mergedSettings.osOverlayEnabled;
   // Tier settings
   $("preferredTier").value = mergedSettings.preferredTier || "auto";
   $("nodePort").value = mergedSettings.nodePort || 8090;
@@ -290,6 +295,7 @@ function readForm() {
     searchPort: parseInt($("searchPort").value) || 8114,
     nexusPort: parseInt($("nexusPort").value) || 8122,
     canvasPort: parseInt($("canvasPort").value) || 8108,
+    bonsaiPort: parseInt($("bonsaiPort").value) || 8798,
     remoteUrl: currentMode !== "local" ? $("remoteUrl").value.trim() : "",
     apiKey: $("apiKey").value.trim(),
     relayUrl: $("relayUrl").value.trim(),
@@ -303,6 +309,8 @@ function readForm() {
     workspaceKnowledge: $("workspaceKnowledge").checked,
     textActionsAllSites: $("textActionsAllSites").checked,
     ragEnabled: $("ragEnabled").checked,
+    commandBarEnabled: $("commandBarEnabled").checked,
+    osOverlayEnabled: $("osOverlayEnabled").checked,
     // Tier settings
     preferredTier: $("preferredTier").value || "auto",
     nodePort: parseInt($("nodePort").value) || 8090,
@@ -1258,6 +1266,30 @@ checkStatus();
 // Auto-pull the authenticated subscription tier so the License panel reflects
 // reality instead of defaulting to Free.
 refreshEntitlement();
+
+// ── Theme Picker ────────────────────────────────────────────────────────
+
+let currentThemeId = DEFAULT_THEME_ID;
+
+async function initThemePicker() {
+  // Load the current theme from chrome.storage.sync
+  const result = await chrome.storage.sync.get(THEME_STORAGE_KEY);
+  currentThemeId = result[THEME_STORAGE_KEY] || DEFAULT_THEME_ID;
+
+  renderThemePicker($("theme-picker-container"), currentThemeId, (themeId) => {
+    currentThemeId = themeId;
+    applyTheme(themeId);
+    saveTheme(themeId).catch((e) => {
+      console.warn("Failed to save theme:", e);
+    });
+  });
+}
+
+// Initialize theme picker on page load
+initThemePicker().catch((e) => {
+  console.warn("Failed to initialize theme picker:", e);
+});
+
 // ── Tunnel / Cloud Presets ───────────────────────────────────────────────
 
 $("btn-preset-tunnel").addEventListener("click", () => {
@@ -1356,11 +1388,11 @@ $("btn-test-tiers").addEventListener("click", async () => {
   // the v4 one is tried. That costs ~2s per connection, which against the 3s
   // budget below turned healthy services into a confident "down".
   //
-  // AitherNode gets TWO probes because it has two real deployment shapes and
+  // awnode gets TWO probes because it has two real deployment shapes and
   // they disagree on scheme: inside this fleet it serves HTTPS with the internal
   // CA (AITHER_INTERSERVICE_TLS), which a Chrome extension CANNOT fetch — the CA
   // is not in the browser's store, which is the whole reason the Veil bridge
-  // exists. Standalone `adk` / AitherNode installs serve plain HTTP. Probing
+  // exists. Standalone `adk` / awnode installs serve plain HTTP. Probing
   // only the direct HTTP URL reported "down" for a node that was answering 200
   // over TLS the entire time. Try direct first, fall back to the bridge, and say
   // which path answered rather than collapsing both into one red dot.
@@ -1371,7 +1403,7 @@ $("btn-test-tiers").addEventListener("click", async () => {
   const probes = [
     { name: "Genesis (Veil bridge)", url: `http://127.0.0.1:${veilPort}/api/bridge/genesis/health`, tier: "genesis" },
     {
-      name: "AitherNode",
+      name: "awnode",
       url: `http://127.0.0.1:${nodePort}/health`,
       fallbackUrl: `http://127.0.0.1:${veilPort}/api/bridge/node/health`,
       directLabel: "direct",
@@ -1423,4 +1455,119 @@ $("btn-test-tiers").addEventListener("click", async () => {
   }
 
   resultsEl.innerHTML = rows.join("");
+});
+// ────────────────────────────────────────────────────────────────────────────
+// SOCIAL AUTOMATION (X)
+//
+// These four keys live in chrome.storage.local, NOT in the synced settings
+// object, so they are loaded and saved separately from everything above.
+//
+// Until 2026-08-02 they had no UI at all. The only thing that ever wrote
+// xAutopostEnabled/xEngageEnabled was content/aither-command-bar.js, which set
+// BOTH to false as a way of telling the service worker "I am driving now" — and
+// that write is permanent. When the command bar itself was later disabled, the
+// service worker kept obeying a kill switch no human had touched, and the
+// account posted nothing for weeks. Nothing surfaced it because there was no
+// surface. This is that surface; the bar now claims its role with an expiring
+// lease (xPageDriverAt) and never touches these keys.
+// ────────────────────────────────────────────────────────────────────────────
+
+// ── On-device model consent ──────────────────────────────────────────────────────────
+// AC001 says a flag nothing can toggle is DELETED, so the control and the gate ship
+// together: this is the toggle, `offscreen/offscreen-inference.js` is the gate, and the key
+// is a top-level chrome.storage.local entry read directly by both — deliberately NOT routed
+// through the settings message plumbing, which the offscreen document does not participate
+// in.
+//
+// It is a USER control and only the options page ever writes it. AC002 is the reason that
+// matters: a content script once wrote a user-facing kill switch as internal coordination,
+// the write was STICKY, and the account posted nothing for weeks with every surface saying
+// "enabled". Coordination uses a lease that expires; a permission uses this.
+//
+// UNSET IS OFF. Every other toggle here defaults ON via `!== false`, and copying that
+// pattern would have made a multi-gigabyte unattended download the shipped default, which is
+// the whole defect. Opt-in is the point.
+const BONSAI_ON_DEVICE_KEY = "bonsaiOnDeviceEnabled";
+
+async function loadBonsaiOnDevice() {
+  const el = $(BONSAI_ON_DEVICE_KEY);
+  if (!el) return;
+  const s = await chrome.storage.local.get(BONSAI_ON_DEVICE_KEY);
+  el.checked = s[BONSAI_ON_DEVICE_KEY] === true;
+}
+
+(function wireBonsaiOnDevice() {
+  const el = $(BONSAI_ON_DEVICE_KEY);
+  if (!el) return;
+  el.addEventListener("change", () => {
+    chrome.storage.local
+      .set({ [BONSAI_ON_DEVICE_KEY]: el.checked })
+      .catch(() => { /* storage denied: the gate stays closed, which is the safe end */ });
+  });
+  loadBonsaiOnDevice().catch(() => {});
+})();
+
+const X_TOGGLE_IDS = ["xAutopostEnabled", "xEngageEnabled", "xDiscoverEnabled"];
+const X_NUMBER_IDS = ["xAutopostIntervalMin", "xEngageIntervalMin"];
+
+async function loadXAutomation() {
+  const keys = [...X_TOGGLE_IDS, ...X_NUMBER_IDS, "xPageDriverAt", "xKillSwitchRepairedAt"];
+  const s = await chrome.storage.local.get(keys);
+  // Unset means ENABLED — matches the service worker, which only stops on an
+  // explicit `=== false`. Rendering an unset key as unchecked would show the
+  // owner "off" for automation that is actually running.
+  for (const id of X_TOGGLE_IDS) {
+    const el = $(id);
+    if (el) el.checked = s[id] !== false;
+  }
+  for (const id of X_NUMBER_IDS) {
+    const el = $(id);
+    if (el && s[id]) el.value = s[id];
+  }
+  renderXStatus(s);
+}
+
+function renderXStatus(s) {
+  const el = $("x-automation-status");
+  if (!el) return;
+  const lines = [];
+  const driverFresh = s.xPageDriverAt && Date.now() - s.xPageDriverAt < 5 * 60 * 1000;
+  lines.push(driverFresh
+    ? '<span style="color:var(--success);">●</span> Driver: on-page command bar (an x.com tab is open and driving)'
+    : '<span style="color:var(--warning);">◐</span> Driver: service worker (no live x.com tab — it will open one on the timer)');
+  const off = X_TOGGLE_IDS.filter((id) => s[id] === false);
+  lines.push(off.length
+    ? `<span style="color:var(--warning);">◐</span> Disabled: ${off.join(", ")}`
+    : '<span style="color:var(--success);">●</span> All three loops enabled');
+  if (s.xKillSwitchRepairedAt) {
+    lines.push('<span style="color:var(--text-muted);">·</span> A stale internal kill switch was cleared on this profile.');
+  }
+  el.innerHTML = lines.map((l) => `<div style="padding:2px 0;">${l}</div>`).join("");
+}
+
+async function saveXAutomation() {
+  const patch = {};
+  for (const id of X_TOGGLE_IDS) {
+    const el = $(id);
+    if (el) patch[id] = el.checked;
+  }
+  for (const id of X_NUMBER_IDS) {
+    const el = $(id);
+    const v = el && parseInt(el.value, 10);
+    if (v && v > 0) patch[id] = v;
+  }
+  await chrome.storage.local.set(patch);
+  await loadXAutomation();
+}
+
+for (const id of [...X_TOGGLE_IDS, ...X_NUMBER_IDS]) {
+  const el = $(id);
+  if (el) el.addEventListener("change", () => { saveXAutomation().catch(() => {}); });
+}
+
+loadXAutomation().catch((e) => {
+  const el = $("x-automation-status");
+  // Say so rather than leaving "checking…" on screen forever — an unresolved
+  // spinner is the same lie as a silent failure.
+  if (el) el.textContent = `could not read automation state: ${e.message}`;
 });

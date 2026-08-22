@@ -1,5 +1,5 @@
 /**
- * AitherConnect onboarding wizard (consumer-first)
+ * Awconnect onboarding wizard (consumer-first)
  * Step 0: choice → BYOK|Fleet|Portal paths
  * BYOK: provider → key entry → verify → finish
  * Fleet: local detect → finish
@@ -466,7 +466,7 @@ async function initProvision() {
 
   $("step4-desc").textContent =
     state.portalMode === "cloud" ? "We'll provision a scoped API key bound to this browser identity. No local install required."
-    : state.portalMode === "hybrid" ? "We'll register the browser with portal and probe for AitherNode running locally."
+    : state.portalMode === "hybrid" ? "We'll register the browser with portal and probe for awnode running locally."
     : "Nothing will be sent to the portal. Make sure AitherOS is running locally (or install it below).";
 
   const showPortal = state.portalMode === "cloud" || state.portalMode === "hybrid";
@@ -527,7 +527,7 @@ $("finish").addEventListener("click", async () => {
       const name = $("agent-name").value.trim() || "browser-conn";
       const r = await P.portalQuickOnboard({
         agent_name: name,
-        description: "AitherConnect browser extension",
+        description: "Awconnect browser extension",
       });
       if (!r.ok) {
         msg("step4-message", r.error || "Portal onboard failed.");

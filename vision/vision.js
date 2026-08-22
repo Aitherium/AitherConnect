@@ -1,4 +1,4 @@
-// Vision (Roboflow) app page — opened from the AitherConnect Apps grid in the
+// Vision (Roboflow) app page — opened from the Awconnect Apps grid in the
 // app embed frame (extension-internal page; full chrome.runtime access).
 // Lean by design: health probe + workflow test-bench. No API key is ever
 // stored in the extension; workflow images are passed as URLs and fetched by

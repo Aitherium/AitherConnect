@@ -1,5 +1,5 @@
 /**
- * AitherConnect — FormBridge API Capture (network interceptor, MAIN world).
+ * Awconnect — FormBridge API Capture (network interceptor, MAIN world).
  *
  * Runs in the PAGE'S world (not the isolated content-script world) so it can wrap
  * the page's own fetch + XMLHttpRequest. The EHR (e.g., ChiroTouch Cloud) fetches

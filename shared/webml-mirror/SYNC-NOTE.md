@@ -1,4 +1,4 @@
-# WebML Mirror — synced from `@aitheros/portal-kit` `dist/webml/`
+# WebML Mirror — synced from `awkit` `dist/webml/`
 
 **DO NOT EDIT BY HAND** — regenerate via `node tools/sync-webml.mjs`.
 

@@ -1,5 +1,5 @@
 /**
- * CORS spike test runner for AitherConnect providers.
+ * CORS spike test runner for Awconnect providers.
  *
  * Tests network connectivity and CORS headers for each provider.
  * Verdict: PASS (HTTP response), BLOCKED (CORS error), ERROR (timeout/network)

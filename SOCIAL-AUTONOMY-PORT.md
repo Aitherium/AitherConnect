@@ -6,8 +6,8 @@ platform is a **mechanical port**: same architecture, same brain, same alarms â€
 only the DOM selectors and URLs change.
 
 This spec is written so a fresh session (or a human) can apply it without
-re-deriving anything. Everything below lives in `AitherConnect/background.js`
-unless noted. After editing, `node --check AitherConnect/background.js`, commit
+re-deriving anything. Everything below lives in `awconnect/background.js`
+unless noted. After editing, `node --check awconnect/background.js`, commit
 with a pathspec, and reload the extension.
 
 ---
@@ -260,8 +260,8 @@ tune selectors live via the panel's Run-now.
   daily cap like X's `xFollowBudget` (LinkedIn flags aggressive connecting fast).
 - **ToS:** automating LinkedIn/X/etc. violates their automation terms; human
   pacing + low caps reduce, don't remove, suspension risk.
-- **Runs only while that tab's browser is open** with AitherConnect connected.
+- **Runs only while that tab's browser is open** with Awconnect connected.
 - The composer/brain path depends on Genesis `/chat` being reachable through the
   Veil bridge; if it isn't, posts use the varied local fallback and engage/discover
   fall back to naive selection â€” add a "brain reachable" check so a fallback-only
-  loop is loud, not silent (tracked as D-1583).
+  loop is loud, not silent.

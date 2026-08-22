@@ -1,5 +1,5 @@
 /**
- * Provider registry for AitherConnect BYOK (Bring Your Own Key) support.
+ * Provider registry for Awconnect BYOK (Bring Your Own Key) support.
  *
  * All providers speak OpenAI-compatible /chat/completions API so the
  * existing SSE parser is reused. Models, embeddings, and model listing
@@ -101,7 +101,7 @@
       needsOriginsHelp: false,
       extraHeaders: {
         "HTTP-Referer": "https://aitherium.com/connect",
-        "X-Title": "AitherConnect",
+        "X-Title": "Awconnect",
       },
     },
 
@@ -128,8 +128,8 @@
 
     bonsai: {
       id: "bonsai",
-      name: "Bonsai-27B (Local, via AitherNode)",
-      // AitherNode's OpenAI-compatible surface routes bonsai* models to the
+      name: "Bonsai-27B (Local, via awnode)",
+      // awnode's OpenAI-compatible surface routes bonsai* models to the
       // local Bonsai llama.cpp server (PrismML fork). Point baseUrl straight
       // at the llama.cpp port (default 8092) to bypass the node entirely.
       baseUrl: "http://localhost:8090",

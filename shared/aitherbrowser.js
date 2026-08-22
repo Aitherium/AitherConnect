@@ -1,7 +1,7 @@
 /**
- * AitherBrowser bridge helpers (D-922)
+ * AitherBrowser bridge helpers
  * ====================================
- * The logic that sits between AitherConnect and the AitherBrowser service:
+ * The logic that sits between Awconnect and the AitherBrowser service:
  * how a request payload is built, how an error response is read, and how a
  * crawl is folded into the knowledge base.
  *
@@ -10,9 +10,9 @@
  * `tests/run-tests.mjs`, so it was covered ONLY by `node --check` — syntax, not
  * behaviour. Nothing asserted that a robots 403 actually sets `robotsBlocked`,
  * or that a partial ingest failure reports the right counts. That is the same
- * shape as the problem D-911 solved on the Python side by extracting the robots
- * policy out of the service and into `lib/web/robots.py`: logic you cannot
- * import is logic you cannot test.
+ * shape as a problem already solved on the platform's Python side by extracting
+ * the robots policy out of the service into its own testable module: logic you
+ * cannot import is logic you cannot test.
  *
  * Loaded by the worker via importScripts(), and by the test runner via
  * `new Function(...)` — hence a plain top-level const, no import/export.
@@ -26,7 +26,7 @@ const AitherBrowserBridge = {
    * Read an AitherBrowser error response.
    *
    * AitherBrowser returns FastAPI-shaped `{"detail": "..."}`. Reporting only the
-   * status code threw away the one thing the user needs — and since the D-911
+   * status code threw away the one thing the user needs — and since the
    * robots gate landed, a 403 is almost always "robots.txt disallows this URL",
    * which is actionable (the service accepts a documented override).
    */

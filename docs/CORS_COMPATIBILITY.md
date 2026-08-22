@@ -2,7 +2,7 @@
 
 **Phase 0 Spike Protocol**
 
-This document tracks CORS compatibility for each AI provider that AitherConnect supports. The spike tests whether browser-to-provider network communication is open and CORS-enabled.
+This document tracks CORS compatibility for each AI provider that Awconnect supports. The spike tests whether browser-to-provider network communication is open and CORS-enabled.
 
 ## Testing Protocol
 
@@ -77,7 +77,7 @@ Node does not enforce CORS; only the in-browser results below count.
 
 ## Gateway Fallback Notes
 
-If direct fetch fails with CORS error (verdict: BLOCKED), AitherConnect has a fallback option:
+If direct fetch fails with CORS error (verdict: BLOCKED), Awconnect has a fallback option:
 
 ### Option A: Internal Gateway Proxy
 
@@ -184,7 +184,7 @@ If testing Ollama provider:
 
    **Find your extension ID:**
    - Open `chrome://extensions`
-   - Look for "AitherConnect" → copy the ID from the URL
+   - Look for "Awconnect" → copy the ID from the URL
    - It looks like: `abc123def456...` (32 chars)
 
 5. **In the spike test:**
@@ -230,7 +230,7 @@ Requires:
 Authorization: Bearer sk-or-...
 Content-Type: application/json
 HTTP-Referer: https://aitherium.com/connect
-X-Title: AitherConnect
+X-Title: Awconnect
 ```
 
 OpenRouter is CORS-friendly for testing.
@@ -303,7 +303,7 @@ Ollama is localhost-only by default. CORS headers in request don't matter; envir
 
 All four major BYOK providers (Anthropic, OpenAI, OpenRouter, Google Gemini) support direct CORS-enabled fetch calls from browser extension contexts **when `host_permissions` include the provider domain**.
 
-The AitherConnect extension's manifest.json already lists these providers in `host_permissions` (as of the Phase 1 build), meaning users can make direct API calls with their own keys without routing through a proxy server. This eliminates latency overhead and cloud infrastructure costs.
+The Awconnect extension's manifest.json already lists these providers in `host_permissions` (as of the Phase 1 build), meaning users can make direct API calls with their own keys without routing through a proxy server. This eliminates latency overhead and cloud infrastructure costs.
 
 ### Test Evidence
 

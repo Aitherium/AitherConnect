@@ -1,5 +1,5 @@
 /**
- * Layout regression test for AitherConnect's nav tab strip.
+ * Layout regression test for Awconnect's nav tab strip.
  *
  * Twelve tabs never fit a Chrome side panel. Before 2026-07-25 the strip was a
  * plain `display:flex` with NO scroll axis, so the overflow was simply
@@ -18,7 +18,7 @@
  * shrink below min-content either way) — REACHABILITY is.
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert';
@@ -147,8 +147,26 @@ try {
   console.log(after);
 
   console.log('\n--- assertions ---');
-  check('nav-tabs: all 12 tabs present', () =>
-    assert.strictEqual(after.tabCount, 12));
+  /* Derived, not hardcoded. This was `assert.strictEqual(after.tabCount, 12)`
+   * and had been red for a while: the sidepanel now declares 14 nav tabs, and
+   * every assertion this test actually exists for — scrolling, clipping,
+   * reachability of the LAST tab — was passing the whole time. A literal count
+   * goes stale the moment anyone adds a tab, and a test that fails for a
+   * legitimate change is one people stop running, which is how the other four
+   * assertions here ended up unread.
+   *
+   * The property worth holding is that every tab DECLARED in the markup
+   * actually renders — a tab dropped by a layout or gating bug is invisible
+   * otherwise. So count the markup and compare. */
+  // `nav-tab(?:\s…)?` and NOT `nav-tabs` — the container is `class="nav-tabs"`,
+  // and a prefix match counts it as a 15th tab, which reads as "one declared tab
+  // failed to render" when nothing is wrong. Exactly the false positive that
+  // makes people delete an assertion instead of reading it.
+  const declaredTabs = (readFileSync(SIDEPANEL, 'utf8')
+    .match(/class="nav-tab(?:\s[^"]*)?"/g) || []).length;
+  check(`nav-tabs: all ${declaredTabs} declared tabs render`, () =>
+    assert.strictEqual(after.tabCount, declaredTabs,
+      `markup declares ${declaredTabs}, page rendered ${after.tabCount}`));
   check('nav-tabs: strip scrolls horizontally (overflow-x auto)', () =>
     assert.strictEqual(after.overflowX, 'auto', `was ${after.overflowX}`));
   check('nav-tabs: content genuinely overflows at panel width', () =>

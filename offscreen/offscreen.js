@@ -1,5 +1,5 @@
 /**
- * AitherConnect Offscreen Document — Audio Recording ONLY
+ * Awconnect Offscreen Document — Audio Recording ONLY
  * ========================================================
  * getUserMedia + MediaRecorder. Returns base64 audio to background via Port.
  * Does NOT do any fetch/transcription — background.js handles that.

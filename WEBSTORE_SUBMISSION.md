@@ -1,10 +1,10 @@
-# AitherConnect Chrome Web Store Submission
+# Awconnect Chrome Web Store Submission
 
-This document describes the one-time manual setup required to publish AitherConnect to the Chrome Web Store via CI/CD.
+This document describes the one-time manual setup required to publish Awconnect to the Chrome Web Store via CI/CD.
 
 ## Overview
 
-The AitherConnect workflow (`.github/workflows/build-connect.yml`) includes automated Chrome Web Store publishing, triggered on tags matching `connect-v*`. The workflow builds the extension, computes checksums, and uploads the public variant via the Chrome Web Store API.
+The Awconnect workflow (`.github/workflows/build-connect.yml`) includes automated Chrome Web Store publishing, triggered on tags matching `connect-v*`. The workflow builds the extension, computes checksums, and uploads the public variant via the Chrome Web Store API.
 
 ## One-Time Setup Steps
 
@@ -22,12 +22,12 @@ Before automation can work, you must manually upload the extension and create it
 1. In the Chrome Web Store Console, click **New item** → select "Extension"
 2. Upload the public package: `dist/aither-connect-public-v3.0.0.zip` (build locally via `scripts/Build-Distributions.ps1 -Target Connect` or grab from a workflow artifact)
 3. Fill in the store listing:
-   - **Name:** AitherConnect — AI Chat & Knowledge Assistant
+   - **Name:** Awconnect — AI Chat & Knowledge Assistant
    - **Description:** AI browsing assistant with a local knowledge base. Bring your own API key (Anthropic, OpenAI, OpenRouter, Gemini, Ollama) — chat, save and search what you read.
    - **Category:** Productivity
    - **Languages:** English
    - **Category tags:** AI, Assistant, ChatGPT, Knowledge Management
-   - **Icon & screenshots:** Use graphics from AitherConnect/icons/ + demo/
+   - **Icon & screenshots:** Use graphics from awconnect/icons/ + demo/
 4. Accept the developer agreement
 5. Save as a draft (DO NOT publish yet — wait for the release tag workflow to automate future updates)
 6. Note the **Extension ID** from the listing URL: `https://chrome.google.com/webstore/detail/<EXTENSION_ID>`
@@ -39,12 +39,12 @@ The workflow uses the Chrome Web Store API (OAuth 2.0 client credentials) to upl
 #### Option A: Google Cloud Console (Recommended)
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (name: "AitherConnect CI" or similar)
+2. Create a new project (name: "Awconnect CI" or similar)
 3. Enable the **Chrome Web Store API** (search in the API library)
 4. Create a **Service Account** (not a User OAuth):
    - Go to **IAM & Admin** → **Service Accounts**
    - Click **Create Service Account**
-   - Name: `aitherconnect-ci` or similar
+   - Name: `awconnect-ci` or similar
    - Grant role: **Editor** (for Web Store API access)
 5. Create an API key or OAuth client:
    - Click on the service account → **Keys** tab
@@ -107,7 +107,7 @@ Once tested, publish the draft to the store manually or trigger another release 
 
 After the one-time setup:
 
-1. **Update the extension**: Edit code, bump the version in `AitherConnect/manifest.json`
+1. **Update the extension**: Edit code, bump the version in `awconnect/manifest.json`
 2. **Create a release tag**: `git tag connect-v<VERSION>` and push
 3. **CI/CD publishes automatically**: The workflow builds, computes checksums, uploads to the store, and creates a GitHub release
 4. **Manual review**: The Chrome Web Store may require a brief manual review (~24 hours) before the update appears in the store

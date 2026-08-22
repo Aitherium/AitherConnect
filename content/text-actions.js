@@ -1,10 +1,10 @@
 /**
- * AitherConnect Text Actions — Floating Action Menu
+ * Awconnect Text Actions — Floating Action Menu
  * ===================================================
  *
  * Injects a floating action menu when the user selects text on any page.
  * Provides quick prompts (Analyze, Summarize, Explain, Review, Translate)
- * and sends the selected text + chosen action to the AitherConnect sidepanel.
+ * and sends the selected text + chosen action to the Awconnect sidepanel.
  *
  * Author: AitherZero
  */
@@ -151,13 +151,13 @@
     const menu = document.createElement("div");
     menu.id = MENU_ID;
     menu.setAttribute("role", "toolbar");
-    menu.setAttribute("aria-label", "AitherConnect text actions");
+    menu.setAttribute("aria-label", "Awconnect text actions");
 
     // Brand badge
     const brand = document.createElement("span");
     brand.className = "aither-brand";
     brand.textContent = "A";
-    brand.title = "AitherConnect";
+    brand.title = "Awconnect";
     menu.appendChild(brand);
 
     // Separator
@@ -342,7 +342,7 @@
     const pageTitle = document.title;
 
     // Send to background -> sidepanel (opens side panel for discussion)
-    showToast(`🔍 ${action.label}ing — opening AitherConnect…`, "info");
+    showToast(`🔍 ${action.label}ing — opening Awconnect…`, "info");
     try {
       if (!chrome.runtime?.id) {
         // Extension was reloaded — this content script is orphaned
@@ -424,5 +424,5 @@
     }
   });
 
-  console.log("[AitherConnect] Text actions content script loaded");
+  console.log("[Awconnect] Text actions content script loaded");
 })();

@@ -1,0 +1,143 @@
+{
+  "id": "discord.com",
+  "version": 1,
+  "name": "Discord — read, draft, send, and drive your bot",
+  "match": [
+    "https://discord.com/channels/*",
+    "https://discord.com/app*"
+  ],
+  "waitFor": "div[role='textbox'][data-slate-editor='true'], ol[data-list-id='chat-messages']",
+  "roles": {
+    "composer": [
+      "div[role='textbox'][data-slate-editor='true']",
+      "div[class*='slateTextArea'] div[role='textbox']"
+    ],
+    "message_list": [
+      "ol[data-list-id='chat-messages']",
+      "div[class*='messagesWrapper'] ol"
+    ],
+    "channel_title": [
+      "section[aria-label] h1",
+      "h1[class*='title']"
+    ],
+    "member_list": [
+      "aside[aria-label*='Members']",
+      "div[class*='membersWrap']"
+    ],
+    "search": [
+      "input[aria-label*='Search']"
+    ]
+  },
+  "context": {
+    "channel_from_path": [
+      1,
+      2
+    ],
+    "note": "URL is /channels/<guild|@me>/<channel>; the ids are path segments 1 and 2. Kept as INDICES rather than a regex: a regex in a JSON data file needs double-escaping that silently corrupts on every hand-edit."
+  },
+  "actions": [
+    {
+      "id": "read_channel",
+      "label": "Read this channel",
+      "icon": "MessagesSquare",
+      "kind": "page",
+      "steps": [
+        {
+          "op": "read",
+          "role": "message_list"
+        }
+      ]
+    },
+    {
+      "id": "summarize_channel",
+      "label": "Summarise the last messages",
+      "icon": "Sparkles",
+      "kind": "compose",
+      "steps": [
+        {
+          "op": "read",
+          "role": "message_list"
+        },
+        {
+          "op": "compose",
+          "prompt": "Summarise this Discord conversation in 3 bullet points. Only the bullets:\n\n{{text}}",
+          "maxTokens": 220
+        }
+      ]
+    },
+    {
+      "id": "summarize_local",
+      "label": "Summarise with YOUR local model",
+      "icon": "Cpu",
+      "kind": "local",
+      "steps": [
+        {
+          "op": "read",
+          "role": "message_list"
+        },
+        {
+          "op": "local",
+          "prompt": "Summarise this Discord conversation in 3 bullet points. Only the bullets:\n\n{{text}}",
+          "maxTokens": 260
+        }
+      ],
+      "note": "Runs on the adk / llama-server node on this machine, not in the browser. Bigger model, needs `adk up`."
+    },
+    {
+      "id": "draft_reply",
+      "label": "Draft a reply (on-device)",
+      "icon": "PenLine",
+      "kind": "compose",
+      "steps": [
+        {
+          "op": "read",
+          "role": "message_list"
+        },
+        {
+          "op": "compose",
+          "prompt": "Write ONE short, natural Discord reply to the end of this conversation. No preamble, no quotes:\n\n{{text}}",
+          "maxTokens": 120
+        },
+        {
+          "op": "type",
+          "role": "composer",
+          "from": "compose"
+        }
+      ],
+      "note": "Types the draft into the composer and STOPS. Sending is a separate, explicit action -- an agent must never post to a human channel without the owner pressing send."
+    },
+    {
+      "id": "send_message",
+      "label": "Send what is in the box",
+      "icon": "Send",
+      "kind": "page",
+      "confirm": true,
+      "steps": [
+        {
+          "op": "key",
+          "role": "composer",
+          "key": "Enter"
+        }
+      ]
+    },
+    {
+      "id": "bot_status",
+      "label": "Bot status",
+      "icon": "Bot",
+      "kind": "fleet",
+      "op": "discord-config"
+    },
+    {
+      "id": "bot_send_here",
+      "label": "Make the BOT post here",
+      "icon": "Radio",
+      "kind": "fleet",
+      "op": "discord-send",
+      "confirm": true,
+      "needs": [
+        "channel_id"
+      ],
+      "note": "Posts as the Aither bot via the fleet service, not as you."
+    }
+  ]
+}

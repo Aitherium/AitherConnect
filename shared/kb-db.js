@@ -1,7 +1,7 @@
 /**
  * Knowledge base IndexedDB storage — pure async wrapper, no external deps.
  *
- * Database: 'aitherconnect_kb', version 1
+ * Database: 'awconnect_kb', version 1
  * Stores: 'documents' (keyPath: 'id'), 'chunks' (keyPath: 'id', index 'docId')
  *
  * Requires: self.AitherFeatureHash.cosineSimilarity, self.AitherEmbeddings
@@ -10,7 +10,7 @@
 (function() {
   'use strict';
 
-  const DB_NAME = 'aitherconnect_kb';
+  const DB_NAME = 'awconnect_kb';
   const DB_VERSION = 1;
   const STORE_DOCUMENTS = 'documents';
   const STORE_CHUNKS = 'chunks';

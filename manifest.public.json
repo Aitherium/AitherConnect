@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "AitherConnect — AI Chat & Knowledge Assistant",
+  "name": "awconnect — AI Chat & Knowledge Assistant",
   "version": "3.6.4",
   "description": "AI browsing assistant with a local knowledge base. Bring your own API key (Anthropic, OpenAI, OpenRouter, Gemini, Ollama) — chat, save and search what you read.",
   "minimum_chrome_version": "124",
@@ -68,7 +68,7 @@
   ],
   "browser_specific_settings": {
     "gecko": {
-      "id": "aitherconnect@aitherium.com",
+      "id": "awconnect@aitherium.com",
       "strict_min_version": "121.0"
     }
   },
@@ -79,7 +79,7 @@
     ]
   },
   "action": {
-    "default_title": "AitherConnect",
+    "default_title": "Awconnect",
     "default_popup": "popup/popup.html"
   },
   "options_ui": {
@@ -103,7 +103,7 @@
       "suggested_key": {
         "default": "Alt+Shift+A"
       },
-      "description": "Open AitherConnect"
+      "description": "Open Awconnect"
     }
   },
   "icons": {

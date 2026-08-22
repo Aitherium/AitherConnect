@@ -1,25 +1,70 @@
-// worker-core.js — synced from @aitheros/portal-kit dist/webml — DO NOT DRIFT.
+// worker-core.js — synced from awkit dist/webml — DO NOT DRIFT.
 // Regenerate with: node tools/sync-webml.mjs (see SYNC-NOTE.md).
 // Import extensions are rewritten for native browser ESM.
-// Worker-side logic for the transformers.js WebGPU runtime, shared across consumers.
+// Worker-side logic for the WebGPU runtimes, shared across consumers.
 //
 // It does NOT create the Worker (that must be done by the consuming app with a
 // bundler-resolvable `new URL('./entry', import.meta.url)` — workers can't be
-// instantiated from a bare package specifier). Instead each consumer ships a 2-line
-// worker entry:
+// instantiated from a bare package specifier). Instead each consumer ships a worker
+// entry that imports and dispatches to this module:
 //
-//   import { runWebMLWorker } from "@aitheros/portal-kit/webml/worker-core";
+//   import { runWebMLWorker } from "awkit/webml/worker-core";
 //   runWebMLWorker(self as any, { loadTransformers: () => import("@huggingface/transformers") });
 //
-// The consumer injects `loadTransformers` because it owns the (large, optional) dependency;
-// portal-kit never imports it directly, so nothing forces it into portal-kit's node_modules.
+// The consumer injects `loadTransformers` because it owns the (large, optional)
+// transformers.js dependency; portal-kit never imports it directly.
 //
-// Only the `transformers-js` runtime is handled here; `bonsai-kernels` / `bonsai-image`
-// get their own worker-core modules in later phases.
+// Supported runtimes:
+// - `transformers-js`: HuggingFace transformers + WebGPU (via injected loader)
+// - `bonsai-kernels`: Aitherium's clean-room WGSL kernels + PrismML GGUF models
 import { getWebMLModel } from "./models.js";
 export function runWebMLWorker(scope, deps) {
-    // Lazily imported so the (large) transformers.js bundle only loads once a model is
-    // requested, and so importing this module never pulls it onto the main thread.
+    // Set up a dispatcher that routes to the appropriate runtime based on first load.
+    // Both runtimes implement the same protocol, so we delegate all messages after
+    // the first load to the runtime-specific handler.
+    let runtimeHandler = null;
+    async function handleFirstLoad(modelId) {
+        const model = getWebMLModel(modelId);
+        if (!model) {
+            scope.postMessage({
+                type: "error",
+                message: `unknown model '${modelId}'`,
+            });
+            return;
+        }
+        if (model.runtime === "transformers-js") {
+            const handler = await initTransformersRuntime(scope, deps);
+            runtimeHandler = handler;
+            handler({ type: "load", modelId });
+        }
+        else if (model.runtime === "bonsai-kernels") {
+            const handler = await initBonsaiRuntime(scope);
+            runtimeHandler = handler;
+            handler({ type: "load", modelId });
+        }
+        else {
+            scope.postMessage({
+                type: "error",
+                message: `model '${modelId}' uses the '${model.runtime}' runtime, not wired in this worker yet`,
+            });
+        }
+    }
+    scope.addEventListener("message", (e) => {
+        const req = e.data;
+        if (!runtimeHandler) {
+            if (req.type === "load") {
+                void handleFirstLoad(req.modelId);
+            }
+        }
+        else {
+            runtimeHandler(req);
+        }
+    });
+}
+/**
+ * Initialize transformers.js runtime. Returns a handler for subsequent messages.
+ */
+async function initTransformersRuntime(scope, deps) {
     let pipe = null;
     let stopped = false;
     const post = (msg) => scope.postMessage(msg);
@@ -27,12 +72,6 @@ export function runWebMLWorker(scope, deps) {
         const model = getWebMLModel(modelId);
         if (!model)
             return post({ type: "error", message: `unknown model '${modelId}'` });
-        if (model.runtime !== "transformers-js") {
-            return post({
-                type: "error",
-                message: `model '${modelId}' uses the '${model.runtime}' runtime, not wired in this worker yet`,
-            });
-        }
         try {
             const { pipeline } = await deps.loadTransformers();
             pipe = await pipeline(model.task, model.repo, {
@@ -85,13 +124,27 @@ export function runWebMLWorker(scope, deps) {
             post({ type: "error", message: `generate failed: ${e.message}` });
         }
     }
-    scope.addEventListener("message", (e) => {
-        const req = e.data;
+    return (req) => {
         if (req.type === "load")
             void load(req.modelId);
         else if (req.type === "generate")
             void generate(req);
         else if (req.type === "interrupt")
             stopped = true;
-    });
+    };
+}
+/**
+ * Initialize Bonsai runtime. Returns a handler for subsequent messages.
+ */
+async function initBonsaiRuntime(scope) {
+    const { initBonsaiRuntime: createBonsaiHandler } = await import("./bonsai-worker-core");
+    const handler = await createBonsaiHandler(scope);
+    return (req) => {
+        if (req.type === "load")
+            void handler.load(req.modelId);
+        else if (req.type === "generate")
+            void handler.generate(req);
+        else if (req.type === "interrupt")
+            handler.interrupt();
+    };
 }

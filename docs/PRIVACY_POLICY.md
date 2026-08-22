@@ -1,4 +1,4 @@
-# Privacy Policy — AitherConnect
+# Privacy Policy — Awconnect
 
 **Effective Date:** [INSERT DATE]  
 **Last Updated:** [INSERT DATE]  
@@ -6,7 +6,7 @@
 
 ## Overview
 
-AitherConnect is an AI-powered browsing assistant that adds intelligent chat, text analysis, and knowledge management to your browser. This privacy policy explains how we handle your data.
+Awconnect is an AI-powered browsing assistant that adds intelligent chat, text analysis, and knowledge management to your browser. This privacy policy explains how we handle your data.
 
 **Core principle:** Your data is yours. We do not collect, store, or sell your personal information. All processing happens locally in your browser or with your explicitly chosen AI provider.
 
@@ -28,7 +28,7 @@ The following are processed **only in your browser** and never sent to Aitherium
 
 ### Optional: AitherOS Fleet Connectivity
 
-If you configure AitherConnect to connect to a local or self-hosted AitherOS instance, communication is between your browser and that instance only. Aitherium does not see this traffic. The data sent depends on which features you enable:
+If you configure Awconnect to connect to a local or self-hosted AitherOS instance, communication is between your browser and that instance only. Aitherium does not see this traffic. The data sent depends on which features you enable:
 
 - **Chat with fleet services** — Your messages are sent to your configured Genesis endpoint.
 - **Knowledge base sync** — Your KB may be synced to your fleet's Nexus service if you enable it.
@@ -39,7 +39,7 @@ You control all URLs and can verify they are yours (localhost, private IP, or yo
 ## What We Don't Do
 
 - **No tracking or analytics** — We do not collect telemetry about your usage.
-- **No cookies** — AitherConnect does not set cookies (though you may have cookies from websites you visit).
+- **No cookies** — Awconnect does not set cookies (though you may have cookies from websites you visit).
 - **No sale of data** — We do not sell, rent, or share your data with third parties.
 - **No advertisements** — We do not show ads or inject advertisements into pages.
 - **No background monitoring** — We do not listen to your keyboard, microphone, or camera.
@@ -50,7 +50,7 @@ You control all URLs and can verify they are yours (localhost, private IP, or yo
 ### Access Your Data
 All your data is stored locally in your browser. You can:
 - Export your knowledge base via the Knowledge Base manager
-- View all stored settings via `chrome://extensions` → AitherConnect → Details → Extension options
+- View all stored settings via `chrome://extensions` → Awconnect → Details → Extension options
 
 ### Delete Your Data
 - **Knowledge base:** Use the Knowledge Base manager (right-click → "Manage Knowledge Base" → Delete)
@@ -79,7 +79,7 @@ If you run your own AitherOS instance (self-hosted or on-premise), Aitherium has
 
 ## Children and COPPA
 
-AitherConnect is not designed for children under 13. We do not knowingly collect data from children. If we become aware of a child using the extension, we will work with parents/guardians to delete the account.
+Awconnect is not designed for children under 13. We do not knowingly collect data from children. If we become aware of a child using the extension, we will work with parents/guardians to delete the account.
 
 ## Changes to This Policy
 

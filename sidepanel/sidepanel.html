@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AitherConnect</title>
+  <title>Awconnect</title>
   <style>
     :root {
       /* Base Colors - Deep Space Glass */
@@ -703,6 +703,138 @@
     .event-time { color: var(--text-muted); flex-shrink: 0; opacity: 0.7; }
     .event-type { color: var(--accent); font-weight: 600; min-width: 40px; }
     .event-msg { color: var(--text-secondary); word-break: break-all; }
+
+    /* ── Decisions Panel ────────────────────────────────────────── */
+
+    .decisions-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .decisions-empty {
+      color: var(--text-muted);
+      text-align: center;
+      padding: 40px 20px;
+      font-size: 12px;
+    }
+
+    .decision-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .decision-card:hover {
+      background: var(--bg-tertiary);
+      border-color: var(--accent);
+      box-shadow: 0 0 10px var(--accent-dim);
+    }
+
+    .decision-card.urgent {
+      border-color: #ef4444;
+      background: rgba(239, 68, 68, 0.05);
+    }
+
+    .decision-card.urgent:hover {
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
+    }
+
+    .decision-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .decision-card-title {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-size: 12px;
+      flex: 1;
+    }
+
+    .decision-card-urgency {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-weight: 600;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+
+    .decision-card-urgency.high,
+    .decision-card-urgency.critical {
+      background: #ef4444;
+      color: #fff;
+    }
+
+    .decision-card-urgency.normal {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+
+    .decision-card-urgency.low {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+    }
+
+    .decision-card-age {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .decision-card-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .decision-option-btn {
+      flex: 1;
+      min-width: 70px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 6px 8px;
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .decision-option-btn:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border-color: var(--accent);
+    }
+
+    .decision-option-btn.recommended {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .decision-option-btn.recommended:hover {
+      background: var(--accent);
+      color: #000;
+    }
+
+    .decisions-loading {
+      color: var(--text-muted);
+      text-align: center;
+      padding: 20px;
+      font-size: 12px;
+    }
 
     /* ── Image Gen Panel ────────────────────────────────────────── */
 
@@ -1890,12 +2022,147 @@
       margin-left: auto;
     }
     .kb-controls input[type="checkbox"] { cursor: pointer; }
+
+    /* ── Vault tab ─────────────────────────────────────────────── */
+    .vault-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .vault-row:hover { border-color: var(--accent, var(--border)); }
+    .vault-row-main { min-width: 0; flex: 1; }
+    .vault-name {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .vault-meta { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }
+    .vault-row-val { flex: 0 1 auto; max-width: 40%; overflow: hidden; }
+    .vault-mask { color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; letter-spacing: 1px; }
+    .vault-value {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-primary);
+      word-break: break-all;
+      /* Selectable on purpose: revealing is already an explicit action, and a
+         value you cannot select is a value you retype by hand. */
+      user-select: all;
+    }
+    .vault-row-actions { display: flex; gap: 2px; flex-shrink: 0; }
+    .vault-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 12px;
+      padding: 2px 5px;
+      line-height: 1;
+    }
+    .vault-btn:hover { background: var(--bg-secondary); border-color: var(--border); }
+    .vault-btn.danger:hover { border-color: #c0392b; }
+    .vault-status.ok  { color: var(--text-secondary); }
+    .vault-status.err { color: #e74c3c; }
+    .vault-empty { color: var(--text-muted); font-size: 11px; padding: 12px; text-align: center; }
+
+    /* ── Lockbox tab ─────────────────────────────────────────── */
+    .lockbox-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      padding: 2px 4px;
+      font-size: 12px;
+      line-height: 1;
+      transition: all var(--transition);
+    }
+    .lockbox-btn:hover { background: var(--bg-secondary); border-color: var(--border); }
+    .lockbox-btn.danger:hover { border-color: #c0392b; }
+
+    /* ── Room Panel ──────────────────────────────────────────────── */
+    .room-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,0.15);
+    }
+    .room-title {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-size: 13px;
+    }
+    .room-status {
+      margin-left: auto;
+      font-family: var(--font-mono);
+    }
+    .room-pillars {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      gap: 8px;
+    }
+    .pillar-lane {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px;
+      min-height: 60px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .pillar-name {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--accent);
+      letter-spacing: 0.05em;
+    }
+    .pillar-events {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-height: 40px;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .pillar-event {
+      padding: 4px 6px;
+      background: rgba(255,255,255,0.02);
+      border-left: 2px solid var(--accent);
+      border-radius: 2px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      word-break: break-word;
+      animation: slideIn 0.3s ease;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(-4px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    .pillar-event.empty {
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 2px 6px;
+    }
   </style>
 </head>
 <body>
   <!-- Top Bar -->
   <div class="topbar">
-    <span class="topbar-logo">AitherConnect</span>
+    <span class="topbar-logo">Awconnect</span>
     <div class="topbar-status" id="status-dot" title="Disconnected"></div>
     <span class="topbar-context" id="tier-badge" title="Detecting tier..." style="cursor:pointer;">detecting...</span>
     <span class="topbar-context" id="workspace-badge" title="No workspace configured"></span>
@@ -1918,10 +2185,14 @@
     <div class="nav-tab" data-panel="notes">📝 Notes</div>
     <div class="nav-tab" data-panel="apps">🧩 Apps</div>
     <div class="nav-tab" data-panel="knowledge">🧠 KB</div>
-    <div class="nav-tab" data-panel="tools">🔧 Tools</div>
+    <div class="nav-tab" data-panel="vault">🔐 Vault</div>
+    <div class="nav-tab" data-panel="lockbox">🔑 Lockbox</div>
+<div class="nav-tab" data-panel="tools">🔧 Tools</div>
     <div class="nav-tab" data-panel="content">📑 Content</div>
     <div class="nav-tab" data-panel="setup">🔌 Setup</div>
+    <div class="nav-tab" data-panel="decisions">⚠️ Decisions</div>
     <div class="nav-tab" data-panel="events">📡 Events</div>
+    <div class="nav-tab" data-panel="room">🛤️ Room</div>
   </div>
 
   <!-- Chat Panel -->
@@ -2153,6 +2424,7 @@
         Experimental
       </label>
     </div>
+    <div id="apps-notice" style="display:none; margin:6px 8px 0; padding:6px 8px; border:1px solid var(--border); border-radius:6px; background:rgba(234,179,8,0.08); color:var(--text-muted); font-size:11px; line-height:1.4;"></div>
     <div class="apps-grid" id="apps-grid"></div>
     <!-- Marketplace sub-view: unified catalog (agent/skill/tool packs, apps,
          extensions) from AitherMarketplace with the server-side entitlement gate. -->
@@ -2208,6 +2480,99 @@
   </div>
 
   <!-- Tools Panel (MCP) -->
+  <!-- Vault Panel — full AitherSecrets browser (see sidepanel/vault-tab.js) -->
+  <div class="panel" id="panel-vault">
+    <div style="padding:12px; display:flex; flex-direction:column; gap:10px; height:100%;">
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="text" id="vault-search" placeholder="Search secrets..."
+          style="flex:1; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text-primary); font-size:12px; font-family:var(--font-mono);" />
+        <button class="input-btn" id="vault-add-toggle" style="padding:4px 8px; font-size:11px;">+ New</button>
+        <button class="input-btn" id="vault-refresh" style="padding:4px 8px; font-size:11px;">Refresh</button>
+      </div>
+      <div id="vault-status" class="vault-status" style="font-size:11px; color:var(--text-muted); font-family:var(--font-mono);">Open to load the vault.</div>
+
+      <!-- Add / replace a secret -->
+      <div id="vault-add-form" style="display:none; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px; flex-direction:column; gap:6px;">
+        <input type="text" id="vault-new-name" placeholder="SECRET_NAME"
+          style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text-primary); font-size:12px; font-family:var(--font-mono);" />
+        <input type="password" id="vault-new-value" placeholder="value (masked)"
+          style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text-primary); font-size:12px; font-family:var(--font-mono);" />
+        <select id="vault-new-type"
+          style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text-primary); font-size:12px; font-family:var(--font-mono);">
+          <option value="api_key">api_key</option>
+          <option value="password">password</option>
+          <option value="token">token</option>
+          <option value="config">config</option>
+        </select>
+        <div style="display:flex; gap:6px; justify-content:flex-end;">
+          <button class="input-btn" id="vault-cancel" style="padding:4px 10px; font-size:11px;">Cancel</button>
+          <button class="input-btn" id="vault-save" style="padding:4px 10px; font-size:11px;">Save</button>
+        </div>
+      </div>
+
+      <div id="vault-list" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px;"></div>
+    </div>
+  </div>
+
+  <!-- Lockbox Panel — Personal + Workspace Secrets (see sidepanel/lockbox-tab.js) -->
+  <div class="panel" id="panel-lockbox">
+    <div style="padding:12px; display:flex; flex-direction:column; gap:12px; height:100%; overflow-y:auto;">
+
+      <!-- Personal Secrets Section -->
+      <div style="border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;">
+        <div style="background:rgba(34,211,238,0.1); border-bottom:1px solid var(--border); padding:8px 12px;">
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--accent);">Personal Secrets</div>
+        </div>
+        <div id="lockbox-personal-status" style="padding:8px 12px; font-size:11px; color:var(--text-muted);">Loading...</div>
+        <div style="display:flex; gap:6px; padding:8px 12px; border-top:1px solid var(--border); background:rgba(0,0,0,0.2);">
+          <input type="text" id="lockbox-personal-name" placeholder="Secret name"
+            style="flex:1; background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text-primary); font-size:11px; font-family:var(--font-mono);" />
+          <input type="text" id="lockbox-personal-value" placeholder="Secret value"
+            style="flex:1; background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text-primary); font-size:11px; font-family:var(--font-mono);" />
+          <button id="lockbox-personal-add" style="padding:6px 10px; font-size:10px; background:rgba(34,211,238,0.15); border:1px solid rgba(34,211,238,0.3); color:var(--accent); border-radius:var(--radius-sm); cursor:pointer; font-weight:600; white-space:nowrap;">Add</button>
+        </div>
+        <div id="lockbox-personal-list" style="flex:1; overflow-y:auto; max-height:150px; display:flex; flex-direction:column; gap:2px; border-top:1px solid var(--border); background:rgba(0,0,0,0.15);"></div>
+      </div>
+
+      <!-- Workspace Secrets Section -->
+      <div id="lockbox-workspace-section" style="border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; display:none;">
+        <div style="background:rgba(139,92,246,0.1); border-bottom:1px solid var(--border); padding:8px 12px;">
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:#a78bfa;">Workspace Secrets</div>
+        </div>
+        <div id="lockbox-workspace-status" style="padding:8px 12px; font-size:11px; color:var(--text-muted);">Loading...</div>
+        <div style="display:flex; gap:6px; padding:8px 12px; border-top:1px solid var(--border); background:rgba(0,0,0,0.2);">
+          <input type="text" id="lockbox-workspace-key" placeholder="Secret key"
+            style="flex:1; background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text-primary); font-size:11px; font-family:var(--font-mono);" />
+          <input type="text" id="lockbox-workspace-value" placeholder="Secret value"
+            style="flex:1; background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text-primary); font-size:11px; font-family:var(--font-mono);" />
+          <button id="lockbox-workspace-set" style="padding:6px 10px; font-size:10px; background:rgba(139,92,246,0.15); border:1px solid rgba(139,92,246,0.3); color:#a78bfa; border-radius:var(--radius-sm); cursor:pointer; font-weight:600; white-space:nowrap;">Set</button>
+        </div>
+        <div id="lockbox-workspace-list" style="flex:1; overflow-y:auto; max-height:150px; display:flex; flex-direction:column; gap:2px; border-top:1px solid var(--border); background:rgba(0,0,0,0.15);"></div>
+      </div>
+
+      <!-- Admin Vault Section -->
+      <div id="lockbox-admin-section" style="border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; display:none;">
+        <div style="background:rgba(239,68,68,0.1); border-bottom:1px solid var(--border); padding:8px 12px;">
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:#f87171;">Admin Vault</div>
+        </div>
+        <div style="display:flex; gap:6px; padding:8px 12px; border-top:1px solid var(--border); background:rgba(0,0,0,0.2);">
+          <input type="text" id="lockbox-admin-filter" placeholder="Filter vault names..."
+            style="flex:1; background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text-primary); font-size:11px; font-family:var(--font-mono);" />
+          <button id="lockbox-admin-refresh" style="padding:6px 10px; font-size:10px; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); color:#f87171; border-radius:var(--radius-sm); cursor:pointer; font-weight:600; white-space:nowrap;">Refresh</button>
+        </div>
+        <div id="lockbox-admin-list" style="flex:1; overflow-y:auto; max-height:150px; display:flex; flex-direction:column; gap:2px; border-top:1px solid var(--border); background:rgba(0,0,0,0.15);"></div>
+      </div>
+
+      <!-- Sign-in prompt for unsigned-out state -->
+      <div id="lockbox-signin-prompt" style="border:1px solid var(--border); border-radius:var(--radius); padding:12px; text-align:center; display:none;">
+        <div style="font-size:12px; color:var(--text-secondary); margin-bottom:8px;">Sign in to the portal to access your secrets.</div>
+        <a href="https://aitherium.com/signin" target="_blank" rel="noopener noreferrer"
+           style="display:inline-block; padding:6px 12px; background:var(--accent); color:#000; border:none; border-radius:var(--radius-sm); font-size:11px; font-weight:600; cursor:pointer; text-decoration:none;">Open Portal</a>
+      </div>
+
+    </div>
+  </div>
+
   <div class="panel" id="panel-tools">
     <div style="padding:12px; display:flex; flex-direction:column; gap:10px; height:100%;">
       <div style="display:flex; gap:6px; align-items:center;">
@@ -2287,6 +2652,47 @@
     <div class="events-log" id="events-log"></div>
   </div>
 
+  <!-- Decisions Panel -->
+  <div class="panel" id="panel-decisions">
+    <div class="decisions-container" id="decisions-container">
+      <div class="decisions-empty">No pending decisions. Good to go!</div>
+    </div>
+  </div>
+
+  <!-- Room Panel — Pillar lanes from the daemon's event stream -->
+  <div class="panel" id="panel-room">
+    <div class="room-header">
+      <div class="room-title">AitherShell Room</div>
+      <div class="room-status" id="room-status" style="font-size:10px; color:var(--text-muted);">—</div>
+    </div>
+    <div class="room-pillars" id="room-pillars">
+      <div class="pillar-lane" data-pillar="intent">
+        <div class="pillar-name">Intent</div>
+        <div class="pillar-events" id="pillar-intent"></div>
+      </div>
+      <div class="pillar-lane" data-pillar="context">
+        <div class="pillar-name">Context</div>
+        <div class="pillar-events" id="pillar-context"></div>
+      </div>
+      <div class="pillar-lane" data-pillar="reasoning">
+        <div class="pillar-name">Reasoning</div>
+        <div class="pillar-events" id="pillar-reasoning"></div>
+      </div>
+      <div class="pillar-lane" data-pillar="orchestration">
+        <div class="pillar-name">Orchestration</div>
+        <div class="pillar-events" id="pillar-orchestration"></div>
+      </div>
+      <div class="pillar-lane" data-pillar="learning">
+        <div class="pillar-name">Learning</div>
+        <div class="pillar-events" id="pillar-learning"></div>
+      </div>
+      <div class="pillar-lane" data-pillar="automation">
+        <div class="pillar-name">Automation</div>
+        <div class="pillar-events" id="pillar-automation"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Setup / Install Overlay -->
   <div id="setup-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:200; align-items:center; justify-content:center; padding:16px;">
     <div id="setup-card" style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:12px; padding:20px; width:100%; max-width:340px; position:relative;">
@@ -2312,7 +2718,12 @@
   <script src="../shared/themes.js"></script>
   <script src="../shared/health-debounce.js"></script>
   <script src="../shared/trace-events.js"></script>
+  <!-- Generated vocabulary — MUST load before room-tab.js -->
+  <script src="aither-events.generated.js?v=20260810a"></script>
   <script src="sidepanel.js?v=20260429c"></script>
   <script src="shell-tab.js?v=20260601a"></script>
+<script src="vault-tab.js?v=20260731a"></script>
+<script src="lockbox-tab.js?v=20260802a"></script>
+  <script src="room-tab.js?v=20260810a"></script>
 </body>
 </html>

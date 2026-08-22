@@ -1,13 +1,13 @@
-# AitherConnect — Browser Extension Packaging
+# Awconnect — Browser Extension Packaging
 
-This directory contains the AitherConnect Chrome/Edge extension.
+This directory contains the Awconnect Chrome/Edge extension.
 
 ## Development (Load Unpacked)
 
 1. Open `chrome://extensions` (or `edge://extensions`)
 2. Enable "Developer mode"
 3. Click "Load unpacked"
-4. Select this `AitherConnect/` directory
+4. Select this `awconnect/` directory
 
 ## Production Build
 
@@ -75,7 +75,7 @@ For enterprise/air-gapped deployments, serve the `.crx` file with an update mani
 The extension connects to AitherOS via configurable URLs. Open settings via:
 - Popup → ⚙️ Settings button
 - Right-click extension icon → Options
-- `chrome://extensions` → AitherConnect → Details → Extension options
+- `chrome://extensions` → Awconnect → Details → Extension options
 
 ### Connection Modes
 
@@ -102,7 +102,7 @@ All settings are stored in `chrome.storage.sync` and synced across devices.
 
 ## Provider Mode (BYOK — Bring Your Own Key)
 
-AitherConnect can operate in **BYOK (Bring Your Own Key) mode**, connecting directly to any AI provider using your own API key—no AitherOS fleet required.
+Awconnect can operate in **BYOK (Bring Your Own Key) mode**, connecting directly to any AI provider using your own API key—no AitherOS fleet required.
 
 ### Supported Providers
 
@@ -119,7 +119,7 @@ AitherConnect can operate in **BYOK (Bring Your Own Key) mode**, connecting dire
 
 To enable BYOK mode:
 
-1. Open AitherConnect settings (popup → ⚙️ Settings or right-click extension → Options)
+1. Open Awconnect settings (popup → ⚙️ Settings or right-click extension → Options)
 2. Switch from "AitherOS Fleet" to "BYOK Provider"
 3. Select a provider from the dropdown
 4. Paste your API key (stored locally in `chrome.storage.local`, never synced)
@@ -146,13 +146,13 @@ See **Phase 0 Spike Protocol** in that document for full testing procedure and w
 
 ### Privacy and Compliance
 
-- **Zero tracking:** AitherConnect does not collect telemetry, analytics, or usage data in BYOK mode
+- **Zero tracking:** Awconnect does not collect telemetry, analytics, or usage data in BYOK mode
 - **Chrome Web Store compliant:** Privacy policy is in `docs/PRIVACY_POLICY.md` and describes exactly what data flows where
 - **Offline-capable:** License verification does not require internet; CORS tests work with test (invalid) API keys
 
 ### Gateway Fallback
 
-If a provider blocks CORS (e.g., OpenAI from browser contexts), AitherConnect can route requests through a local gateway:
+If a provider blocks CORS (e.g., OpenAI from browser contexts), Awconnect can route requests through a local gateway:
 
 ```
 Browser → chrome-extension://... → http://localhost:8182/v1/proxy/... → Provider
@@ -190,7 +190,7 @@ remote-code policy. `unlimitedStorage` is declared so the cached weights are
 not evicted.
 
 The protocol/registry layer in `shared/webml-mirror/` is generated from
-`@aitheros/portal-kit` `dist/webml/` by `node tools/sync-webml.mjs` — see
+`awkit` `dist/webml/` by `node tools/sync-webml.mjs` — see
 `shared/webml-mirror/SYNC-NOTE.md`. Never edit those files by hand;
 `tests/webml-sync.test.js` fails on drift.
 

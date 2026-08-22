@@ -203,7 +203,7 @@ async function verifyLicense(envelope, options = {}) {
       };
     }
 
-    if (payload.product !== "aitherconnect") {
+    if (payload.product !== "awconnect") {
       return {
         ok: false,
         tier: "free",

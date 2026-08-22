@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     :root {
       --bg-primary: #030305;
@@ -137,6 +139,55 @@
     .svc-pill.down { color: #64748b; border-color: rgba(100, 116, 139, 0.15); }
 
     /* ── Section ─────────────────────────────────────── */
+    .appr-card {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-left: 2px solid var(--warning);
+      border-radius: var(--radius);
+      padding: 8px;
+      margin-bottom: 6px;
+    }
+    .appr-agent { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+    .appr-res {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--accent);
+      word-break: break-all;
+      margin: 2px 0 6px;
+    }
+    .appr-why { font-size: 10px; color: var(--text-muted); margin-bottom: 6px; }
+    .appr-actions { display: flex; gap: 6px; }
+    .appr-btn {
+      flex: 1;
+      padding: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: var(--font-sans);
+    }
+    .appr-approve { background: rgba(16,185,129,0.2); color: var(--success); }
+    .appr-approve:hover { background: rgba(16,185,129,0.3); }
+    .appr-deny { background: rgba(239,68,68,0.2); color: var(--error); }
+    .appr-deny:hover { background: rgba(239,68,68,0.3); }
+    .appr-btn:disabled { opacity: 0.5; cursor: default; }
+    .appr-err { font-size: 10px; color: var(--error); margin-top: 5px; }
+    .appr-token {
+      margin-top: 6px;
+      padding: 6px;
+      background: rgba(16,185,129,0.1);
+      border: 1px solid rgba(16,185,129,0.3);
+      border-radius: 6px;
+    }
+    .appr-token code {
+      display: block;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--success);
+      word-break: break-all;
+      margin-top: 3px;
+    }
     .btn-section { padding: 10px 12px 6px; }
     .btn-section-label {
       font-size: 9px;
@@ -226,13 +277,78 @@
     }
     .footer a { color: #6366f1; text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
+
+    /* ── Decision Cards ──────────────────────────────────── */
+    .decision-card {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-left: 2px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+    .decision-card.urgent { border-left-color: #ef4444; }
+    .decision-card.critical { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.05); }
+    .decision-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+      word-break: break-word;
+      max-height: 2.4em;
+      overflow: hidden;
+      line-height: 1.2;
+    }
+    .decision-meta {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+      font-size: 10px;
+    }
+    .decision-badge {
+      background: rgba(255,255,255,0.08);
+      padding: 2px 6px;
+      border-radius: 3px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .decision-badge.urgent { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+    .decision-badge.high { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+    .decision-options {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .decision-opt-btn {
+      flex: 1;
+      min-width: 60px;
+      padding: 5px 8px;
+      font-size: 10px;
+      font-weight: 500;
+      border: 1px solid rgba(34,211,238,0.3);
+      background: rgba(34,211,238,0.1);
+      color: #22d3ee;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-family: var(--font-sans);
+    }
+    .decision-opt-btn:hover {
+      background: rgba(34,211,238,0.2);
+      border-color: rgba(34,211,238,0.5);
+    }
+    .decision-opt-btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
   </style>
 </head>
 <body>
   <!-- Header -->
   <div class="header">
-    <img src="../icons/icon48.png" alt="AitherConnect" />
-    <h2>AitherConnect</h2>
+    <img src="../icons/icon48.png" alt="Awconnect" />
+    <h2>Awconnect</h2>
     <span class="version">v2.0.0</span>
   </div>
 
@@ -253,6 +369,25 @@
     <span class="tier-badge free" id="tier-badge">FREE</span>
   </div>
   <div class="feats-row" id="feats-row" style="display:none"></div>
+
+  <!-- Access requests — federated agents blocked awaiting a human decision.
+       Hidden entirely when there are none: an empty panel every session trains
+       people to ignore the one time it matters. -->
+  <div class="btn-section" id="approvals-section" style="display:none">
+    <div class="btn-section-label">Access Requests</div>
+    <div id="approvals-list"></div>
+  </div>
+
+  <!-- Decision Cards — from Genesis.
+       Hidden when no open decisions. -->
+  <div class="btn-section" id="decisions-section" style="display:none">
+    <div class="btn-section-label">Decisions</div>
+    <div id="decisions-list"></div>
+    <div id="decisions-error" style="font-size:11px;color:var(--error);margin-top:6px;display:none"></div>
+    <div id="decisions-no-token" style="font-size:11px;color:var(--text-muted);margin-top:6px;display:none">
+      Sign in to your account to see pending decisions
+    </div>
+  </div>
 
   <!-- Dashboard / Veil -->
   <div class="btn-section">
@@ -278,6 +413,10 @@
       <button class="eco-btn" id="btn-desktop">
         <span class="icon">🪟</span>
         <span class="label">Desktop App<span class="sub">AitherDesktop</span></span>
+      </button>
+      <button class="eco-btn" id="btn-os-overlay">
+        <span class="icon">🛰️</span>
+        <span class="label">OS Over This Page<span class="sub" id="os-overlay-sub">Alt+O · Living OS</span></span>
       </button>
       <button class="eco-btn" id="btn-sidepanel">
         <span class="icon">📡</span>
@@ -371,9 +510,9 @@
         <span class="icon">⚡</span>
         <span class="label">AitherShell<span class="sub">CLI engine (core)</span></span>
       </button>
-      <button class="eco-btn" id="btn-get-aithernode">
+      <button class="eco-btn" id="btn-get-awnode">
         <span class="icon">🔌</span>
-        <span class="label">AitherNode<span class="sub">MCP server / API</span></span>
+        <span class="label">awnode<span class="sub">MCP server / API</span></span>
       </button>
       <button class="eco-btn" id="btn-get-aitherdesktop">
         <span class="icon">🪟</span>
@@ -411,6 +550,8 @@
   <script src="../shared/vendor/nacl.min.js"></script>
   <script src="../shared/license-verify.js"></script>
   <script src="../shared/gating.js"></script>
+  <script src="../shared/portal-api.js"></script>
+  <script src="../shared/genesis-auth.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

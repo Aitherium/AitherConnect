@@ -1,7 +1,7 @@
-# Generate placeholder icons for Chrome Extension
+﻿# Generate placeholder icons for Chrome Extension
 # NOTE: Real branded icons are in icons/ (copied from aitherium-brandkit/aitheros-constellation).
 # This script is only for fallback if branded icons are missing.
-param($Path = "d:\AitherOS-Fresh\AitherConnect\icons")
+param($Path = "d:\AitherOS-Fresh\Awconnect\icons")
 
 if (!(Test-Path $Path)) { New-Item -ItemType Directory -Path $Path -Force }
 

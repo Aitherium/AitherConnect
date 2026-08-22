@@ -1,10 +1,10 @@
 {
-  "name": "aitherconnect-tests",
+  "name": "awconnect-tests",
   "version": "1.0.0",
   "type": "module",
-  "description": "Unit tests for AitherConnect shared modules",
+  "description": "Unit tests for Awconnect shared modules",
   "scripts": {
-    "test": "node run-tests.mjs && node test-value-capture.mjs && node webml-sync.test.js && node navtabs-layout.test.mjs"
+    "test": "node run-tests.mjs && node test-value-capture.mjs && node webml-sync.test.js && node navtabs-layout.test.mjs && node web-search-composition.test.mjs"
   },
   "devDependencies": {
     "fake-indexeddb": "^6.0.0"

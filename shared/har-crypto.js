@@ -1,5 +1,5 @@
 /**
- * AitherConnect — HAR sealing (service-worker world).
+ * Awconnect — HAR sealing (service-worker world).
  *
  * The "Send to Aitherium (encrypted)" capture destination seals the HAR to an
  * Aitherium-held Curve25519 public key using NaCl (TweetNaCl, already imported
@@ -21,7 +21,7 @@
  */
 
 const HAR_INTAKE_KEY_PATH = "/api/config/har-intake-key";
-let _cachedIntakeKey = null; // { key: Uint8Array, fetched_at: number }
+let _cachedIntakeKey = null; // { portal: string, key: Uint8Array, fetched_at: number }
 const INTAKE_KEY_TTL_MS = 60 * 60 * 1000; // 1h
 
 function _b64encode(bytes) {
@@ -47,10 +47,23 @@ function _b64decode(b64) {
  */
 async function getIntakeKey(portalUrl) {
   const now = Date.now();
-  if (_cachedIntakeKey && now - _cachedIntakeKey.fetched_at < INTAKE_KEY_TTL_MS) {
+  const base = String(portalUrl || "").replace(/\/+$/, "");
+  // Cache PER PORTAL. This used to be a single global entry with no record of
+  // which host it came from, so within the TTL a capture was sealed to whichever
+  // portal happened to be configured FIRST. That is wrong in exactly the case
+  // this feature exists for: a customer running their own AitherSecrets switches
+  // the extension to their host, and their HAR is sealed to OUR public key —
+  // travelling to a host that cannot open it, encrypted to a party that was not
+  // chosen. Sealing to the wrong recipient is not a cache miss, it is a
+  // disclosure decision made by a stale variable.
+  if (
+    _cachedIntakeKey &&
+    _cachedIntakeKey.portal === base &&
+    now - _cachedIntakeKey.fetched_at < INTAKE_KEY_TTL_MS
+  ) {
     return _cachedIntakeKey.key;
   }
-  const url = String(portalUrl || "").replace(/\/+$/, "") + HAR_INTAKE_KEY_PATH;
+  const url = base + HAR_INTAKE_KEY_PATH;
   const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
   if (!res.ok) {
     throw new Error(`HAR intake key unavailable (${res.status})`);
@@ -60,7 +73,7 @@ async function getIntakeKey(portalUrl) {
   if (!b64) throw new Error("HAR intake key not configured on server");
   const key = _b64decode(b64);
   if (key.length !== 32) throw new Error(`intake key wrong length (${key.length}, want 32)`);
-  _cachedIntakeKey = { key, fetched_at: now };
+  _cachedIntakeKey = { portal: base, key, fetched_at: now };
   return key;
 }
 

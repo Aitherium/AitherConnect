@@ -1,5 +1,5 @@
 /**
- * Health-status debounce for AitherConnect service probes.
+ * Health-status debounce for Awconnect service probes.
  *
  * A single failed probe through the flaky Veil bridge used to flip a service
  * to "down" instantly, so the status panel flapped LyraWiki/Genesis UP→DOWN→UP

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ArcWorldModel — in-browser surprise sparkline</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#0b1220; color:#e2e8f0; }
+  main { max-width: 680px; margin: 0 auto; padding: 32px 20px; }
+  h1 { font-size: 18px; font-weight: 600; color:#f1f5f9; margin: 0 0 4px; }
+  p.sub { font-size: 12px; color:#64748b; margin: 0 0 24px; line-height: 1.6; }
+  .card { background:#0d1526; border:1px solid #1e293b; border-radius:10px; padding:16px; }
+  #sparkline { width:100%; }
+  #sparkline svg { display:block; width:100%; height:auto; }
+  .stats { display:flex; gap:18px; margin-top:12px; font-size:12px; color:#94a3b8; flex-wrap:wrap; }
+  .stats b { color:#f1f5f9; font-weight:600; }
+  .stats .down { color:#34d399; }
+  .btnrow { margin-top:16px; display:flex; gap:8px; }
+  button { font:inherit; font-size:13px; padding:8px 14px; border-radius:8px; border:1px solid #1e293b; background:#0f1b33; color:#e2e8f0; cursor:pointer; }
+  button:hover { border-color:#334155; }
+  .note { margin-top:16px; font-size:11px; color:#475569; line-height:1.7; }
+  code { color:#a7f3d0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ArcWorldModel · surprise sparkline</h1>
+  <p class="sub">A tabular world model learns the player's pattern live in this tab.
+  Each move is scored for surprise <i>before</i> it is learned — true prediction
+  error. Surprise drops as the pattern becomes familiar. This mirrors the service
+  surprise pipeline (<code>get_voe_history</code> → VoE z-scores / severities /
+  timestamps), so the same visualization can later be fed from either source.</p>
+
+  <div class="card">
+    <div id="sparkline"></div>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div class="btnrow">
+    <button id="play">Play 20 moves</button>
+    <button id="reset">Reset</button>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2 style="font-size:14px;font-weight:600;color:#f1f5f9;margin:0 0 8px">Bonsai assistant</h2>
+    <p class="sub" style="margin:0 0 8px" id="bonsai-status">probing WebGPU…</p>
+    <div id="bonsai-progress" style="display:none;height:6px;background:#0f1b33;border-radius:4px;overflow:hidden;margin-bottom:8px">
+      <div id="bonsai-bar" style="height:100%;width:0%;background:#34d399"></div>
+    </div>
+    <div id="bonsai-response" style="font-size:12px;color:#cbd5e1;white-space:pre-wrap;min-height:48px;line-height:1.6"></div>
+    <div id="bonsai-inputrow" style="display:none;margin-top:8px;gap:8px;flex-direction:row">
+      <input id="bonsai-prompt" type="text" placeholder="Ask the assistant to suggest the next move…"
+        style="flex:1;font:inherit;font-size:12px;padding:8px 10px;border-radius:8px;border:1px solid #1e293b;background:#0f1b33;color:#e2e8f0">
+      <button id="bonsai-send">Suggest</button>
+      <button id="bonsai-stop">Stop</button>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2 style="font-size:14px;font-weight:600;color:#f1f5f9;margin:0 0 8px">Contribute to the shared world model</h2>
+    <label style="font-size:12px;color:#94a3b8;display:flex;gap:8px;align-items:center">
+      <input type="checkbox" id="arc-contrib-toggle">
+      Opt in — teach the shared model from this session's play
+    </label>
+    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+      <button id="arc-contrib-submit">Submit now</button>
+      <span id="arc-contrib-status" style="font-size:11px;color:#64748b"></span>
+    </div>
+  </div>
+
+  <p class="note" id="note"></p>
+</main>
+
+<script src="world-model.js"></script>
+<script src="surprise-sparkline.js"></script>
+<script src="bonsai-bridge.js"></script>
+<script src="contribute-bridge.js"></script>
+<script>
+(() => {
+  const KEY = "arc-wm-demo-journal";
+  const wm = ArcWorldModel.loadWorldModel(localStorage, KEY);
+  const journal = ArcWorldModel.createJournal(wm, localStorage, KEY);
+  let events = [];
+
+  // A tiny deterministic world. The player mostly repeats a learned route;
+  // 20% of moves explore at random, producing contradiction surprises.
+  const WORLD = {
+    A: { setX: { next: "B", reward: 1.0 }, setY: { next: "C", reward: 0.4 } },
+    B: { setZ: { next: "A", reward: 1.0 }, setX: { next: "C", reward: 0.6 } },
+    C: { setW: { next: "A", reward: 0.2 }, setY: { next: "B", reward: 0.5 } },
+  };
+  const ROUTE = { A: "setX", B: "setZ", C: "setW" };
+
+  function playOne(state) {
+    const options = Object.keys(WORLD[state]);
+    const explore = Math.random() < 0.2;
+    const action = explore
+      ? options[(Math.random() * options.length) | 0]
+      : ROUTE[state];
+    const t = WORLD[state][action];
+    const ev = {
+      surprise: ArcSurprise.surpriseForMove(wm, state, action, t.next),
+      move: state + "·" + action,
+      timestamp: Date.now(),
+    };
+    wm.observe(state, action, t.next, t.reward, false);
+    if (contrib.isOptedIn()) contrib.capture(state, action, t.next, { game: "demo" });
+    events.push(ev);
+    if (events.length > 200) events = events.slice(-200);
+    return t.next;
+  }
+
+  function render() {
+    document.getElementById("sparkline").innerHTML =
+      ArcSurprise.renderSparkline(events, { window: 5, width: 640, height: 120 });
+    const s = ArcSurprise.sparklineSummary(events, 5);
+    document.getElementById("stats").innerHTML =
+      "<span>transitions <b>" + wm.getTransitionCount() + "</b></span>" +
+      "<span>moves <b>" + events.length + "</b></span>" +
+      "<span>avg surprise <b>" + (s.count ? s.lastAvg.toFixed(2) : "—") + "</b></span>" +
+      (s.count && s.lastAvg < s.firstAvg
+        ? '<span class="down">learning ↓</span>'
+        : '<span>exploring…</span>');
+    document.getElementById("note").textContent =
+      'Journal: localStorage key "' + KEY + '" — ' +
+      (wm.getTransitionCount()
+        ? "learning persists across reloads."
+        : "empty; press Play.");
+  }
+
+  let playing = false;
+  document.getElementById("play").addEventListener("click", () => {
+    if (playing) return;
+    playing = true;
+    let state = "A";
+    let done = 0;
+    const iv = setInterval(() => {
+      state = playOne(state);
+      render();
+      if (++done >= 20) {
+        clearInterval(iv);
+        playing = false;
+        journal.save();
+      }
+    }, 350);
+  });
+
+  document.getElementById("reset").addEventListener("click", () => {
+    try { localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
+    location.reload();
+  });
+
+  // ── Bonsai assistant — reuses the aitherium.com runtime (webml-mirror
+  //    bonsai-worker.js) via the ArcBonsai bridge. WebGPU-gated: a machine
+  //    without a usable adapter gets a clean "disabled" state, never a crash.
+  const BONSAI_WORKER = "../webml-mirror/bonsai-worker.js";
+  const BONSAI_MODEL = "bonsai-1.7b"; // small default (TDR lesson)
+  const bonsaiStatus = document.getElementById("bonsai-status");
+  const bonsaiBar = document.getElementById("bonsai-bar");
+  const bonsaiProgress = document.getElementById("bonsai-progress");
+  const bonsaiResponse = document.getElementById("bonsai-response");
+  const bonsaiInputRow = document.getElementById("bonsai-inputrow");
+  const bonsaiPrompt = document.getElementById("bonsai-prompt");
+  let bonsai = null;
+  let activeGen = null;
+
+  ArcBonsai.probeWebGPU().then((cap) => {
+    if (!cap.available) {
+      bonsaiStatus.textContent = "WebGPU unavailable — Bonsai assistant disabled. Use Chrome/Edge with a GPU.";
+      return;
+    }
+    bonsaiStatus.textContent = "adapter OK — loading Bonsai 1.7B…";
+    let worker;
+    try {
+      worker = new Worker(BONSAI_WORKER, { type: "module" });
+    } catch (e) {
+      bonsaiStatus.textContent = "Bonsai worker failed to start: " + e.message;
+      return;
+    }
+    bonsai = ArcBonsai.createBonsaiBridge(worker, { modelId: BONSAI_MODEL });
+    bonsai.load(BONSAI_MODEL).then(() => {
+      bonsaiStatus.textContent = "Bonsai 1.7B ready — " + wm.getTransitionCount() + " transitions learned";
+      bonsaiProgress.style.display = "none";
+      bonsaiInputRow.style.display = "flex";
+    }).catch((err) => {
+      bonsaiStatus.textContent = "Bonsai load failed: " + err.message;
+    });
+  }).catch(() => {
+    bonsaiStatus.textContent = "WebGPU probe failed — Bonsai assistant disabled.";
+  });
+
+  document.getElementById("bonsai-send").addEventListener("click", () => {
+    const text = bonsaiPrompt.value.trim();
+    if (!text || !bonsai) return;
+    bonsaiResponse.textContent = "";
+    const last = events.length ? events[events.length - 1].move : "start";
+    const summary = ArcSurprise.sparklineSummary(events, 5);
+    const prompt =
+      "You are assisting a human playing ARC-AGI-3 in the browser. " +
+      "Last move: " + last + ". Learned transitions: " + wm.getTransitionCount() +
+      ". Avg surprise: " + (summary.count ? summary.lastAvg.toFixed(2) : "n/a") +
+      ". Recent moves: " + events.slice(-8).map((e) => e.move).join(", ") +
+      ". Suggest ONE concrete next action and one line of reasoning.";
+    activeGen = bonsai.generate(
+      { messages: [{ role: "user", content: prompt }], maxTokens: 96 },
+      {
+        onToken: (tok) => { bonsaiResponse.textContent += tok; },
+        onProgress: (pct, file) => {
+          if (typeof pct === "number") {
+            bonsaiProgress.style.display = "block";
+            bonsaiBar.style.width = pct + "%";
+          }
+          if (file) bonsaiStatus.textContent = file;
+        },
+        onDone: (msg) => {
+          if (msg.reasoning) {
+            bonsaiResponse.textContent += "\n\n(thinking: " + msg.reasoning + ")";
+          }
+          bonsaiStatus.textContent = "done — " + (msg.tokensPerSecond ? msg.tokensPerSecond.toFixed(1) + " tok/s" : "");
+          activeGen = null;
+        },
+        onError: (err) => {
+          bonsaiResponse.textContent = "error: " + err.message;
+          bonsaiStatus.textContent = "generation failed";
+          activeGen = null;
+        },
+      }
+    );
+  });
+
+  document.getElementById("bonsai-stop").addEventListener("click", () => {
+    if (activeGen) activeGen.interrupt();
+  });
+
+  // ── Opt-in contribute — raw transitions go to a SERVER relay (wm_relay.py
+  //    holds the token; nothing in this bundle ever touches a contributor
+  //    token). Fail-soft: a missing relay retains the queue, never crashes.
+  const contrib = ArcContribute.createContributeBridge({
+    relayUrl: (typeof window !== "undefined" && window.__ARC_RELAY_URL__) || "",
+    store: localStorage,
+  });
+  const contribToggle = document.getElementById("arc-contrib-toggle");
+  const contribStatus = document.getElementById("arc-contrib-status");
+  contribToggle.checked = contrib.isOptedIn();
+  contribToggle.addEventListener("change", () => {
+    contrib.setOptIn(contribToggle.checked);
+    contribStatus.textContent = contribToggle.checked
+      ? "opted in — transitions submitted on Submit / after each play"
+      : "opted out — nothing leaves this tab";
+  });
+  document.getElementById("arc-contrib-submit").addEventListener("click", async () => {
+    contribStatus.textContent = "submitting… (" + contrib.queueLength() + " queued)";
+    const r = await contrib.flush();
+    contribStatus.textContent = r.ok
+      ? "relay: " + r.quarantined + " quarantined, " + r.rejected + " rejected"
+      : "not submitted: " + r.error + " (queue kept: " + contrib.queueLength() + ")";
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
