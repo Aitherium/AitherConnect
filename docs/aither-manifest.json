@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "1",
+  "name": "AitherConnect",
+  "description": "Browser extension — federated AI search, page context, and the Living OS overlay.",
+  "url": "https://aitherium.github.io/AitherConnect/",
+  "repository": "https://github.com/Aitherium/AitherConnect",
+  "kind": "tool",
+  "status": "public",
+  "adopt": "Install it and ask an agent about the tab you are on.",
+  "pairs_with": [
+    "awdk"
+  ],
+  "includes": [],
+  "metrics": {
+    "files": {
+      "value": 129,
+      "as_of": "2026-08-25T06:17:51-07:00"
+    },
+    "tests": {
+      "value": 17,
+      "as_of": "2026-08-25T06:17:51-07:00"
+    }
+  }
+}
