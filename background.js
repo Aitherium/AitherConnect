@@ -1865,6 +1865,13 @@ async function listTenantApps() {
  *  marker. */
 async function ensureXAlarms() {
   await chrome.storage.local.set({ xAutomationMode: "fleet" });
+  // Notification-surface alarms are recreated here (onStartup + onInstalled both
+  // call this) so a lost alarm set self-heals. The x-*/li-* AUTOMATION alarms are
+  // deliberately NOT created — the fleet owns automation since 3.8.0; the ticks
+  // below are manual-only via the command bar.
+  chrome.alarms.create("health-check", { periodInMinutes: 0.5 });
+  chrome.alarms.create("tier-check", { periodInMinutes: 0.5 });
+  chrome.alarms.create("decisions-poll", { periodInMinutes: 1 });
 }
 
 /** True when the X/LinkedIn automation runs in the fleet (3.8.0+ default). */
