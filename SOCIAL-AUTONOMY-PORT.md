@@ -1,17 +1,5 @@
 # Porting the autonomous X loop to LinkedIn (and other socials)
 
-> ## SUPERSEDED in 3.8.0 (2026-08-26) — the port is DONE, in a different direction.
->
-> The X and LinkedIn automation lanes moved to the **fleet**: headless
-> AitherBrowser + routines + the strategist agent, no browser window, no
-> extension tab-driving (owner mandate: "stop driving the screen; I want to use
-> X myself"). This spec is kept as the record of the OLD in-browser pattern —
-> the extension no longer creates the x-*/li-* alarms, and its tick/engage/
-> discover functions no-op on the `xAutomationMode` marker. The LinkedIn lane
-> will follow the FLEET architecture (same shape as the X lane: `li_*` config
-> block, headless driver, same caps/hold/decision-card machinery), not this
-> in-browser pattern.
-
 The X system in `background.js` (post / engage / discover / daily-summary + the
 on-page control panel in `content/x-control-panel.js`) is a template. Each new
 platform is a **mechanical port**: same architecture, same brain, same alarms —
