@@ -2714,26 +2714,46 @@ async function xSessionSync() {
 // moment x.com logs in — no button. xSessionSync() is idempotent server-side
 // (re-import overwrites the vault), so auto-firing on startup and on login is
 // not a chatter loop: auth_token only changes on login/logout.
-const X_SESSION_STATE_KEYS = ["xAutomationMode", "xLastSessionHandoff", "xSessionHandoffCount"];
+const X_SESSION_STATE_KEYS = ["xAutomationMode", "xLastSessionHandoff", "xSessionHandoffCount", "xSessionFingerprint"];
 let _xHandoffTimer = null;
+
+async function _xCookieFingerprint() {
+  // auth_token + ct0 values, sorted — a cheap "did the session change?" test
+  // so SW wakes (every few minutes via alarms) never re-POST idempotently.
+  try {
+    const [a, b] = await Promise.all([
+      chrome.cookies.getAll({ domain: "x.com" }),
+      chrome.cookies.getAll({ domain: "twitter.com" }),
+    ]);
+    return [...(a || []), ...(b || [])]
+      .filter((c) => c.name === "auth_token" || c.name === "ct0")
+      .map((c) => `${c.name}=${c.value}`)
+      .sort()
+      .join("|") || "none";
+  } catch { return "error"; }
+}
 
 async function autoSyncXSession(reason) {
   const s = await chrome.storage.local.get(X_SESSION_STATE_KEYS);
   if (s.xAutomationMode !== "fleet") return; // legacy in-browser mode: not a donor
+  const fp = await _xCookieFingerprint();
+  if (fp !== "error" && fp === s.xSessionFingerprint) return; // unchanged since last handoff
   const r = await xSessionSync();
   if (r && r.ok) {
     await chrome.storage.local.set({
       xLastSessionHandoff: Date.now(),
       xSessionHandoffCount: (Number(s.xSessionHandoffCount) || 0) + 1,
+      xSessionFingerprint: fp,
     });
     console.log(`[awconnect] auto session handoff ok (${reason}) — ${r.cookieCount} cookies`);
   } else if (r && r.error && r.error.indexOf("Not logged in") !== -1) {
-    // Nothing to hand off yet; the cookie listener fires again the instant the
-    // owner logs into x.com — this IS the zero-click path.
+    // Record the logged-out state so we do not retry until the cookies appear;
+    // the cookie listener fires the instant the owner logs into x.com.
+    await chrome.storage.local.set({ xSessionFingerprint: fp });
     console.log(`[awconnect] auto handoff skipped (${reason}): not logged into x.com`);
   } else if (r && r.error) {
-    // Daemon/bridge unreachable or rejected — options shows the manual button
-    // as the fallback, and the next startup/cookie change retries.
+    // Daemon/bridge unreachable or rejected — do NOT record the fingerprint so
+    // the next wake retries; options shows the manual button as the fallback.
     console.warn(`[awconnect] auto handoff failed (${reason}): ${r.error}`);
   }
 }
@@ -2749,6 +2769,7 @@ function scheduleXHandoff(reason) {
 
 chrome.runtime.onStartup.addListener(() => scheduleXHandoff("startup"));
 chrome.runtime.onInstalled.addListener(() => scheduleXHandoff("install"));
+scheduleXHandoff("worker-start");
 chrome.cookies.onChanged.addListener((info) => {
   const c = info.cookie;
   if (c.name !== "auth_token") return;                 // the session cookie; ct0 churns
