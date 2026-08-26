@@ -1530,7 +1530,34 @@ async function loadXAutomation() {
 function renderXStatus(s) {
   const el = $("x-automation-status");
   if (!el) return;
+  const banner = $("x-fleet-banner");
+  if (banner) banner.style.display = s.xAutomationMode === "fleet" ? "block" : "none";
   const lines = [];
+  // 3.8.0: fleet mode = the automation runs headless on the server; this
+  // browser's only job for X is handing the fleet a fresh session.
+  if (s.xAutomationMode === "fleet") {
+    const last = s.xLastSessionHandoff
+      ? new Date(s.xLastSessionHandoff).toLocaleTimeString()
+      : "never (auto-hands off when x.com logs in)";
+    lines.push('<span style="color:var(--success);">●</span> Fleet mode: automation runs headless on the server. This browser hands the fleet your x.com session automatically on login.');
+    lines.push(`<span style="color:var(--text-muted);">·</span> Last handoff: ${last} (${Number(s.xSessionHandoffCount) || 0})`);
+    lines.push('<button id="x-sync-session-btn" type="button" style="margin-top:6px;">Sync X session now</button>');
+    el.innerHTML = lines.map((l) => `<div style="padding:2px 0;">${l}</div>`).join("");
+    const btn = $("#x-sync-session-btn");
+    if (btn) btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Syncing…";
+      const r = await chrome.runtime.sendMessage({ action: "x-session-sync" }).catch(() => null);
+      btn.disabled = false;
+      if (r && r.ok) {
+        btn.textContent = "✓ Synced";
+        await loadXAutomation();
+      } else {
+        btn.textContent = `Retry — ${(r && (r.error || r.reason)) || "no reply from worker"}`;
+      }
+    });
+    return;
+  }
   const driverFresh = s.xPageDriverAt && Date.now() - s.xPageDriverAt < 5 * 60 * 1000;
   lines.push(driverFresh
     ? '<span style="color:var(--success);">●</span> Driver: on-page command bar (an x.com tab is open and driving)'
