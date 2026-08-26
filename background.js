@@ -133,7 +133,15 @@ const DEFAULT_SETTINGS = {
   // had that failure mode, it draws one strip and offers its own hide control
   // (`aitherBarHidden`). So it ships ON, with a real toggle in options.
   // Do not flip this to false again without adding a control that can flip it back.
-  commandBarEnabled: true,
+  //
+  // FLIPPED TO false 2026-08-26 (owner: "it just keeps opening shit on my
+  // screen — I don't want to see the interaction"): the fleet owns automation
+  // since 3.8.0, so the bar is no longer the in-page driver — the reason it
+  // shipped ON is gone, and both surfaces are visible UI on pages the owner is
+  // using. The toggles exist in options (the 2026-07-31 condition), so this
+  // default is a preference, not a dead switch. Nothing about the extension is
+  // visible by default now; the session handoff runs silently.
+  commandBarEnabled: false,
 };
 
 // Live settings object — populated from storage on startup
@@ -4134,6 +4142,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // checkHealth() calls updateBadge(), so refreshing after it keeps a pending
     // card count from being overwritten by the ambient health badge.
     await refreshAccessRequestBadge();
+    // Self-healing session handoff: autoSyncXSession is fingerprint-gated, so
+    // after a SUCCESSFUL import (fingerprint stored) or a logged-out state
+    // (fingerprint stored) this is a no-op; only an UNCONNECTED state (import
+    // failed, fingerprint NOT stored) re-attempts. One failed import no longer
+    // strands the fleet without a session until the next login or startup.
+    scheduleXHandoff("health-cadence");
   }
   if (alarm.name === "tier-check") {
     await autoDetectTier();
@@ -4209,7 +4223,13 @@ function injectInto(tabId, url) {
   // the command bar, whose xPageDriverAt lease keeps renewing from its closures
   // even after the DOM node is gone, so social automation stops with nothing
   // logged and every surface still reporting enabled.
-  if (SETTINGS.osOverlayEnabled && !isSocial) _xInjectPanel(tabId, "content/aither-overlay-bridge.js");
+  // 2026-08-26 (owner: "it just keeps opening shit on my screen — I don't want
+  // to see the interaction"): the overlay now serves the Living OS hosts ONLY
+  // (IS_OS_ORIGIN — AC009 keeps the default true because the OS answers
+  // ?mode=overlay there); ordinary websites the owner is using get NOTHING
+  // injected, and the command bar stays OFF by default (the fleet drives
+  // social automation since 3.8.0 — the bar's driver role is gone).
+  if (SETTINGS.osOverlayEnabled && IS_OS_ORIGIN.test(url)) _xInjectPanel(tabId, "content/aither-overlay-bridge.js");
   if (SETTINGS.commandBarEnabled && isSocial) _xInjectPanel(tabId, "content/aither-command-bar.js");
 }
 

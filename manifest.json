@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "awconnect \u2014 AI Chat & Knowledge Assistant",
-  "version": "3.8.2",
+  "version": "3.8.3",
   "description": "AI browsing assistant with a local knowledge base. Bring your own API key (Anthropic, OpenAI, OpenRouter, Gemini, Ollama) \u2014 chat, save and search what you read.",
   "minimum_chrome_version": "124",
   "content_security_policy": {
