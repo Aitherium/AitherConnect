@@ -133,15 +133,7 @@ const DEFAULT_SETTINGS = {
   // had that failure mode, it draws one strip and offers its own hide control
   // (`aitherBarHidden`). So it ships ON, with a real toggle in options.
   // Do not flip this to false again without adding a control that can flip it back.
-  //
-  // FLIPPED TO false 2026-08-26 (owner: "it just keeps opening shit on my
-  // screen — I don't want to see the interaction"): the fleet owns automation
-  // since 3.8.0, so the bar is no longer the in-page driver — the reason it
-  // shipped ON is gone, and both surfaces are visible UI on pages the owner is
-  // using. The toggles exist in options (the 2026-07-31 condition), so this
-  // default is a preference, not a dead switch. Nothing about the extension is
-  // visible by default now; the session handoff runs silently.
-  commandBarEnabled: false,
+  commandBarEnabled: true,
 };
 
 // Live settings object — populated from storage on startup
@@ -1853,43 +1845,42 @@ async function listTenantApps() {
   };
 }
 
-/** (Re)create the X/LinkedIn automation alarms — REMOVED in 3.8.0.
+/** (Re)create the X automation alarms.
  *
- *  The X and LinkedIn automation lanes moved to the FLEET (headless
- *  AitherBrowser, routine-driven, no browser window). The extension no longer
- *  creates the x-* and li-* alarms: posting, engagement, discovery and the
- *  daily summary all run server-side now. Keeping them would double-post (the
- *  fleet posts AND the extension posts) and would keep hijacking the owner's
- *  own browser tabs — exactly what 3.8.0 exists to end.
- *
- *  What remains: the fleet-mode marker (the sidepanel renders from it) and the
- *  alarms that are still the extension's job (health-check, tier-check,
- *  decisions-poll — created in their own sections below). The Sync X session
- *  path (xSessionSync) is unchanged: it is the sanctioned way to hand the
- *  fleet a fresh session when X invalidates the stored one.
- *
- *  Belt-and-braces: if a stale x-* or li-* alarm somehow fires between the
- *  update and its cleanup, the tick/engage/discover functions no-op on the
- *  marker. */
+ *  Called from BOTH onInstalled and onStartup. It used to live only in
+ *  onInstalled: alarms do survive a browser restart, so that mostly worked —
+ *  but "mostly" is the wrong guarantee for the thing that decides whether the
+ *  account posts at all. If the alarm set is ever lost (profile copy, storage
+ *  eviction, a disable/enable cycle that skips onInstalled) nothing recreates
+ *  it and the automation is dead until a reinstall, with every UI still
+ *  reporting "enabled". `chrome.alarms.create` on an existing name just
+ *  rewrites it, so calling this repeatedly is free. */
 async function ensureXAlarms() {
-  await chrome.storage.local.set({ xAutomationMode: "fleet" });
-  // Notification-surface alarms are recreated here (onStartup + onInstalled both
-  // call this) so a lost alarm set self-heals. The x-*/li-* AUTOMATION alarms are
-  // deliberately NOT created — the fleet owns automation since 3.8.0; the ticks
-  // below are manual-only via the command bar.
-  chrome.alarms.create("health-check", { periodInMinutes: 0.5 });
-  chrome.alarms.create("tier-check", { periodInMinutes: 0.5 });
-  chrome.alarms.create("decisions-poll", { periodInMinutes: 1 });
-}
-
-/** True when the X/LinkedIn automation runs in the fleet (3.8.0+ default). */
-async function ensureFleetMode() {
-  const s = await chrome.storage.local.get(["xAutomationMode"]);
-  return s.xAutomationMode === "fleet";
+  const s = await chrome.storage.local.get([
+    "xAutopostIntervalMin", "xEngageIntervalMin", "xDiscoverIntervalMin",
+  ]);
+  const postMins = Number(s.xAutopostIntervalMin) || 180; // ~8/day default
+  chrome.alarms.create("x-autopost", { periodInMinutes: postMins, delayInMinutes: 1 });
+  // Engagement runs more often than posting — that's where growth comes from.
+  const engMins = Number(s.xEngageIntervalMin) || 60; // hourly default
+  chrome.alarms.create("x-engage", { periodInMinutes: engMins, delayInMinutes: 3 });
+  // Discovery: search topics, follow accounts, engage beyond the home feed.
+  const discMins = Number(s.xDiscoverIntervalMin) || 150; // ~every 2.5h
+  chrome.alarms.create("x-discover", { periodInMinutes: discMins, delayInMinutes: 5 });
+  // Daily digest: roll up the day's activity + follower trend into one notice.
+  chrome.alarms.create("x-daily-summary", { periodInMinutes: 1440, delayInMinutes: 10 });
+  // LinkedIn mirrors X — autonomous post/engage/discover, so the account runs
+  // even when no linkedin tab is open. The on-page bar (liPageDriverAt lease)
+  // drives instead when it is present; same model as X.
+  const liPostMins = Number(s.liAutopostIntervalMin) || 360;
+  chrome.alarms.create("li-autopost", { periodInMinutes: liPostMins, delayInMinutes: 2 });
+  const liEngMins = Number(s.liEngageIntervalMin) || 120;
+  chrome.alarms.create("li-engage", { periodInMinutes: liEngMins, delayInMinutes: 4 });
+  const liDiscMins = Number(s.liDiscoverIntervalMin) || 240;
+  chrome.alarms.create("li-discover", { periodInMinutes: liDiscMins, delayInMinutes: 6 });
 }
 
 async function xEngageTick(force) {
-  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     await repairXKillSwitch();
     const s = await chrome.storage.local.get(["xEngageEnabled"]);
@@ -2119,7 +2110,6 @@ async function _xLoadTab(url) {
 }
 
 async function xDiscoverTick() {
-  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     const s = await chrome.storage.local.get(["xDiscoverEnabled", "xDiscoverTopicIdx"]);
     if (s.xDiscoverEnabled === false) return; // kill switch
@@ -2369,7 +2359,6 @@ async function liRecordFollows(n, today, used) {
 }
 
 async function liAutopostTick() {
-  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     const s = await chrome.storage.local.get(["liAutopostEnabled"]);
     if (s.liAutopostEnabled === false) return; // kill switch (user intent only)
@@ -2395,7 +2384,6 @@ async function liAutopostTick() {
 }
 
 async function liEngageTick() {
-  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     const s = await chrome.storage.local.get(["liEngageEnabled"]);
     if (s.liEngageEnabled === false) return;
@@ -2425,7 +2413,6 @@ async function liEngageTick() {
 }
 
 async function liDiscoverTick() {
-  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     const s = await chrome.storage.local.get(["liDiscoverEnabled", "liDiscoverTopicIdx"]);
     if (s.liDiscoverEnabled === false) return; // kill switch
@@ -2722,76 +2709,6 @@ async function xSessionSync() {
     cookieCount: names.size,
   };
 }
-
-// ── AUTO session handoff (3.8.1) ────────────────────────────────────────────
-// The owner mandate is ZERO manual steps: in fleet mode this browser's only job
-// for X is handing the fleet a fresh session, and it must do that by itself the
-// moment x.com logs in — no button. xSessionSync() is idempotent server-side
-// (re-import overwrites the vault), so auto-firing on startup and on login is
-// not a chatter loop: auth_token only changes on login/logout.
-const X_SESSION_STATE_KEYS = ["xAutomationMode", "xLastSessionHandoff", "xSessionHandoffCount", "xSessionFingerprint"];
-let _xHandoffTimer = null;
-
-async function _xCookieFingerprint() {
-  // auth_token + ct0 values, sorted — a cheap "did the session change?" test
-  // so SW wakes (every few minutes via alarms) never re-POST idempotently.
-  try {
-    const [a, b] = await Promise.all([
-      chrome.cookies.getAll({ domain: "x.com" }),
-      chrome.cookies.getAll({ domain: "twitter.com" }),
-    ]);
-    return [...(a || []), ...(b || [])]
-      .filter((c) => c.name === "auth_token" || c.name === "ct0")
-      .map((c) => `${c.name}=${c.value}`)
-      .sort()
-      .join("|") || "none";
-  } catch { return "error"; }
-}
-
-async function autoSyncXSession(reason) {
-  const s = await chrome.storage.local.get(X_SESSION_STATE_KEYS);
-  if (s.xAutomationMode !== "fleet") return; // legacy in-browser mode: not a donor
-  const fp = await _xCookieFingerprint();
-  if (fp !== "error" && fp === s.xSessionFingerprint) return; // unchanged since last handoff
-  const r = await xSessionSync();
-  if (r && r.ok) {
-    await chrome.storage.local.set({
-      xLastSessionHandoff: Date.now(),
-      xSessionHandoffCount: (Number(s.xSessionHandoffCount) || 0) + 1,
-      xSessionFingerprint: fp,
-    });
-    console.log(`[awconnect] auto session handoff ok (${reason}) — ${r.cookieCount} cookies`);
-  } else if (r && r.error && r.error.indexOf("Not logged in") !== -1) {
-    // Record the logged-out state so we do not retry until the cookies appear;
-    // the cookie listener fires the instant the owner logs into x.com.
-    await chrome.storage.local.set({ xSessionFingerprint: fp });
-    console.log(`[awconnect] auto handoff skipped (${reason}): not logged into x.com`);
-  } else if (r && r.error) {
-    // Daemon/bridge unreachable or rejected — do NOT record the fingerprint so
-    // the next wake retries; options shows the manual button as the fallback.
-    console.warn(`[awconnect] auto handoff failed (${reason}): ${r.error}`);
-  }
-}
-
-function scheduleXHandoff(reason) {
-  if (_xHandoffTimer) clearTimeout(_xHandoffTimer);
-  // Debounce: a login sets several cookies in a burst; one handoff is enough.
-  _xHandoffTimer = setTimeout(() => {
-    _xHandoffTimer = null;
-    autoSyncXSession(reason).catch(() => {});
-  }, 8000);
-}
-
-chrome.runtime.onStartup.addListener(() => scheduleXHandoff("startup"));
-chrome.runtime.onInstalled.addListener(() => scheduleXHandoff("install"));
-scheduleXHandoff("worker-start");
-chrome.cookies.onChanged.addListener((info) => {
-  const c = info.cookie;
-  if (c.name !== "auth_token") return;                 // the session cookie; ct0 churns
-  if (!/(^|\.)(x|twitter)\.com$/.test(c.domain || "")) return;
-  if (info.cause !== "explicit" && info.cause !== "overwrite") return;
-  scheduleXHandoff(c.value ? "login" : "logout");
-});
 
 // POST to a live FormBridge engine, probing candidate ports (discovery can run
 // before any pack/port is configured). Loopback only.
@@ -4142,20 +4059,31 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // checkHealth() calls updateBadge(), so refreshing after it keeps a pending
     // card count from being overwritten by the ambient health badge.
     await refreshAccessRequestBadge();
-    // Self-healing session handoff: autoSyncXSession is fingerprint-gated, so
-    // after a SUCCESSFUL import (fingerprint stored) or a logged-out state
-    // (fingerprint stored) this is a no-op; only an UNCONNECTED state (import
-    // failed, fingerprint NOT stored) re-attempts. One failed import no longer
-    // strands the fleet without a session until the next login or startup.
-    scheduleXHandoff("health-cadence");
   }
   if (alarm.name === "tier-check") {
     await autoDetectTier();
   }
-  // 3.8.0: the x-* and li-* alarm branches were REMOVED — the automation
-  // lanes moved to the fleet (headless AitherBrowser). A stale alarm firing
-  // here would double-post; the tick/engage/discover functions no-op on the
-  // xAutomationMode marker as belt-and-braces.
+  if (alarm.name === "x-autopost") {
+    await xAutopostTick();
+  }
+  if (alarm.name === "x-engage") {
+    await xEngageTick();
+  }
+  if (alarm.name === "x-discover") {
+    await xDiscoverTick();
+  }
+  if (alarm.name === "x-daily-summary") {
+    await xDailySummaryTick();
+  }
+  if (alarm.name === "li-autopost") {
+    await liAutopostTick();
+  }
+  if (alarm.name === "li-engage") {
+    await liEngageTick();
+  }
+  if (alarm.name === "li-discover") {
+    await liDiscoverTick();
+  }
   if (alarm.name === "decisions-poll") {
     await decisionsPollTick();
   }
@@ -4223,13 +4151,7 @@ function injectInto(tabId, url) {
   // the command bar, whose xPageDriverAt lease keeps renewing from its closures
   // even after the DOM node is gone, so social automation stops with nothing
   // logged and every surface still reporting enabled.
-  // 2026-08-26 (owner: "it just keeps opening shit on my screen — I don't want
-  // to see the interaction"): the overlay now serves the Living OS hosts ONLY
-  // (IS_OS_ORIGIN — AC009 keeps the default true because the OS answers
-  // ?mode=overlay there); ordinary websites the owner is using get NOTHING
-  // injected, and the command bar stays OFF by default (the fleet drives
-  // social automation since 3.8.0 — the bar's driver role is gone).
-  if (SETTINGS.osOverlayEnabled && IS_OS_ORIGIN.test(url)) _xInjectPanel(tabId, "content/aither-overlay-bridge.js");
+  if (SETTINGS.osOverlayEnabled && !isSocial) _xInjectPanel(tabId, "content/aither-overlay-bridge.js");
   if (SETTINGS.commandBarEnabled && isSocial) _xInjectPanel(tabId, "content/aither-command-bar.js");
 }
 
@@ -4296,7 +4218,6 @@ async function decisionsPollTick() {
 // when an x.com tab is available (opens one if none), and lets xComposeText
 // write fresh text each time.
 async function xAutopostTick() {
-  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     await repairXKillSwitch();
     const s = await chrome.storage.local.get(["xAutopostEnabled"]);

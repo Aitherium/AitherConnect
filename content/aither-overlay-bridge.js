@@ -348,12 +348,6 @@
   // dockHint.edge, and side docks pad horizontal scrollers (overflowX), not the
   // vertical ones a bottom dock pads.
   const EDGE_PAD_PROP = { bottom: "paddingBottom", top: "paddingTop", left: "paddingLeft", right: "paddingRight" };
-  // AC012 (2026-08-08 class): the sweep below used to call getComputedStyle on
-  // EVERY div interleaved with style writes — a layout thrash that froze heavy
-  // pages (~250ms) on every renderMode. Now throttled, and read-then-write so
-  // the reads share one layout pass.
-  let _lastPadAt = 0;
-  let _lastPadSig = "";
   function applyPagePad() {
     const prop = EDGE_PAD_PROP[dockHint.edge];
     const horizontal = dockHint.edge === "left" || dockHint.edge === "right";
@@ -363,30 +357,20 @@
       if (dock) pad = Math.round(horizontal ? dock.w : dock.h);
     }
     const px = pad ? pad + "px" : "";
-    const sig = prop + "|" + px;
-    const now = Date.now();
-    if (sig === _lastPadSig && now - _lastPadAt < 500) return; // throttled
-    _lastPadSig = sig; _lastPadAt = now;
     try { document.documentElement.style[prop] = px; } catch { /* no doc yet */ }
     try { document.body.style[prop] = px; } catch { /* no body yet */ }
     // Same no-op trap as the command bar: html/body padding does nothing on SPA
     // shells that fill the viewport and scroll inside their OWN container
     // (measured on x.com: scrollHeight unchanged by body padding). Pad those
     // containers too so the dock never covers the host page's content.
-    // READ-THEN-WRITE: cheap overflow reads first, getComputedStyle only on the
-    // few real candidates, and all style writes AFTER the reads.
-    const candidates = [];
+    let n = 0;
     for (const el of document.querySelectorAll("div, main, section")) {
-      if (el.scrollHeight <= el.clientHeight + 10 && el.scrollWidth <= el.clientWidth + 10) continue;
-      candidates.push(el);
-      if (candidates.length >= 24) break;
-    }
-    for (const el of candidates) {
       const o = getComputedStyle(el)[horizontal ? "overflowX" : "overflowY"];
       const isScroll = o === "auto" || o === "scroll" || (o === "hidden" && (horizontal ? el.scrollWidth > el.clientWidth + 10 : el.scrollHeight > el.clientHeight + 10));
       if (!isScroll) continue;
       if (pad && !(horizontal ? el.scrollWidth > el.clientWidth + 10 : el.scrollHeight > el.clientHeight + 10)) continue; // only real scrollers when padding
       try { el.style[prop] = px; } catch { /* noop */ }
+      if (++n >= 24) break;
     }
   }
 

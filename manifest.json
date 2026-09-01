@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "awconnect \u2014 AI Chat & Knowledge Assistant",
-  "version": "3.8.3",
-  "description": "AI browsing assistant with a local knowledge base. Bring your own API key (Anthropic, OpenAI, OpenRouter, Gemini, Ollama) \u2014 chat, save and search what you read.",
+  "name": "awconnect — AI Chat & Knowledge Assistant",
+  "version": "3.7.0",
+  "description": "AI browsing assistant with a local knowledge base. Bring your own API key (Anthropic, OpenAI, OpenRouter, Gemini, Ollama) — chat, save and search what you read.",
   "minimum_chrome_version": "124",
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
@@ -45,12 +45,8 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://www.regulations.gov/*"
-      ],
-      "js": [
-        "content/cta-engine.js"
-      ],
+      "matches": [ "https://www.regulations.gov/*" ],
+      "js": [ "content/cta-engine.js" ],
       "run_at": "document_idle"
     },
     {
@@ -59,33 +55,21 @@
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],
-      "js": [
-        "content/portal-bridge.js"
-      ],
+      "js": [ "content/portal-bridge.js" ],
       "run_at": "document_idle",
       "all_frames": true
     },
     {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "content/freeze-watchdog.js"
-      ],
+      "matches": [ "http://*/*", "https://*/*" ],
+      "js": [ "content/freeze-watchdog.js" ],
       "run_at": "document_idle",
       "all_frames": false
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": [
-        "adapters/*.json"
-      ],
-      "matches": [
-        "https://www.regulations.gov/*",
-        "https://*.aitherium.com/*"
-      ]
+      "resources": ["adapters/*.json"],
+      "matches": ["https://www.regulations.gov/*", "https://*.aitherium.com/*"]
     }
   ],
   "browser_specific_settings": {
