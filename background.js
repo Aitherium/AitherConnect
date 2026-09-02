@@ -4949,6 +4949,60 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       })();
       return true;
+    /* Ported 2026-09-01 from the stale AitherConnect/ tree, where the fix for the
+       2026-08-19 'signed in but AitherShell says Authentication required' report
+       landed and never reached this — the SHIPPING — copy. Without this case the OS
+       overlay's os-token-request is never answered and getHostToken() is null forever. */
+    case "os-token-request":
+      /* THE OVERLAY IS SIGNED IN AND CANNOT PROVE IT.
+       *
+       * `os-identity-request` above resolves WHO you are so the taskbar can say
+       * "david". It deliberately returns no credential, so the OS could display
+       * an identity it had no way to USE — which is exactly the owner's
+       * 2026-08-19 report: signed in, and AitherShell answering "Authentication
+       * required".
+       *
+       * The cause is not a bug in the OS. `aither_auth_token` is SameSite=Lax
+       * (AitherVeil/src/lib/auth-cookie.ts), and in the overlay the top-level
+       * site is whatever page you are on — youtube.com, github.com — so the OS
+       * iframe is a THIRD-PARTY context and Chrome correctly never sends the
+       * cookie. Measured the same day: portal answers 401 with
+       * {"error":"Authentication required"} for a cookieless call, which is
+       * verbatim the banner the shell displayed. Every authenticated surface in
+       * the overlay fails this way, together, and none of them can say why.
+       *
+       * So relay a BEARER the OS can attach explicitly. Not a cookie policy
+       * change: flipping the platform to SameSite=None would fix the overlay by
+       * weakening CSRF posture on every surface, and this needs neither.
+       *
+       * The token goes out over postMessage with targetOrigin pinned to the OS
+       * origin (see aither-overlay-bridge.js), so the host page cannot read it.
+       * Never log the value. */
+      (async () => {
+        try {
+          let token = null;
+          try { token = await self.AitherPortal.getPortalBearer(); } catch { /* no session storage */ }
+          if (!token) {
+            // Fall back to the session cookie itself. Same domain list and same
+            // order as os-identity-request, so the two channels cannot disagree
+            // about which session is current.
+            for (const domain of ["portal.aitherium.com", "demo.aitherium.com", ".aitherium.com"]) {
+              try {
+                const c = await chrome.cookies.get({ url: `https://${domain.replace(/^\./, "")}`, name: "aither_auth_token" });
+                if (c?.value) { token = c.value; break; }
+              } catch { /* no cookie access */ }
+            }
+          }
+          // null, never "" — an empty string reads as a token to a truthiness
+          // check on the far side and produces `Authorization: Bearer `, which
+          // 401s in a way that looks like an expired session rather than an
+          // absent one.
+          sendResponse({ token: token || null });
+        } catch {
+          sendResponse({ token: null });
+        }
+      })();
+      return true;
     case "inject-overlay":
     case "toggle-overlay":
       // Inject the AitherOS holographic overlay (transparent iframe of the real
