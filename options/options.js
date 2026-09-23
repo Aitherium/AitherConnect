@@ -241,6 +241,7 @@ async function populateForm(settings) {
   // shows the shipped default rather than an unchecked box that lies about it.
   $("commandBarEnabled").checked = mergedSettings.commandBarEnabled !== false;
   $("osOverlayEnabled").checked = !!mergedSettings.osOverlayEnabled;
+  $("syncEnabled").checked = !!mergedSettings.syncEnabled;
   // Tier settings
   $("preferredTier").value = mergedSettings.preferredTier || "auto";
   $("nodePort").value = mergedSettings.nodePort || 8090;
@@ -311,6 +312,7 @@ function readForm() {
     ragEnabled: $("ragEnabled").checked,
     commandBarEnabled: $("commandBarEnabled").checked,
     osOverlayEnabled: $("osOverlayEnabled").checked,
+    syncEnabled: $("syncEnabled").checked,
     // Tier settings
     preferredTier: $("preferredTier").value || "auto",
     nodePort: parseInt($("nodePort").value) || 8090,
@@ -1322,6 +1324,55 @@ $("btn-preset-local").addEventListener("click", () => {
   showToast("Preset: local mode applied — click Save");
 });
 
+// ── Link to aitherium.com (device grant -> Identity -> role-aware bundle) ──
+function linkStatus(text, color) {
+  const el = $("link-status");
+  if (!el) return;
+  el.textContent = "";
+  const span = document.createElement("span");
+  span.style.color = `var(--${color})`;
+  span.textContent = text;
+  el.appendChild(span);
+}
+
+$("btn-link")?.addEventListener("click", async () => {
+  const btn = $("btn-link");
+  btn.disabled = true;
+  linkStatus("Asking aitherium.com for a code...", "text-muted");
+  const start = await chrome.runtime.sendMessage({ type: "link-start" });
+  if (!start?.ok) {
+    linkStatus(`✕ ${start?.error || "Could not reach aitherium.com"}`, "error");
+    btn.disabled = false;
+    return;
+  }
+  linkStatus(`Approve in the opened tab — code: ${start.userCode}`, "text-primary");
+  const deadline = Date.now() + (start.expiresIn || 900) * 1000;
+  let intervalMs = (start.interval || 5) * 1000;
+  const tick = async () => {
+    if (Date.now() > deadline) {
+      linkStatus("✕ Code expired — try again", "error");
+      btn.disabled = false;
+      return;
+    }
+    const poll = await chrome.runtime.sendMessage({ type: "link-poll", device_code: start.deviceCode });
+    if (poll?.status === "complete") {
+      const who = poll.identity?.username || poll.identity?.email || "you";
+      const role = poll.role === "owner" ? "platform owner — full access" : poll.role === "user" ? "linked" : `signed in (${poll.bundleError || "role pending"})`;
+      linkStatus(`✓ ${who}: ${role}`, "success");
+      btn.disabled = false;
+      return;
+    }
+    if (poll?.status === "denied" || poll?.status === "expired" || poll?.status === "error") {
+      linkStatus(`✕ ${poll.error || poll.status}`, "error");
+      btn.disabled = false;
+      return;
+    }
+    if (poll?.status === "slow_down") intervalMs += 5000;
+    setTimeout(tick, intervalMs);
+  };
+  setTimeout(tick, intervalMs);
+});
+
 // ── Cloud Gateway device flow ───────────────────────────────────────
 $("btn-cloud-connect")?.addEventListener("click", async () => {
   const btn = $("btn-cloud-connect");
@@ -1530,7 +1581,16 @@ async function loadXAutomation() {
 function renderXStatus(s) {
   const el = $("x-automation-status");
   if (!el) return;
+  const banner = $("x-fleet-banner");
+  if (banner) banner.style.display = s.xAutomationMode === "fleet" ? "block" : "none";
   const lines = [];
+  // 3.8.0: fleet mode = the automation runs headless on the server; this
+  // browser's only job for X is handing the fleet a fresh session.
+  if (s.xAutomationMode === "fleet") {
+    lines.push('<span style="color:var(--success);">●</span> Fleet mode: automation runs headless on the server. This browser only syncs the session (Sync X session below).');
+    el.innerHTML = lines.map((l) => `<div style="padding:2px 0;">${l}</div>`).join("");
+    return;
+  }
   const driverFresh = s.xPageDriverAt && Date.now() - s.xPageDriverAt < 5 * 60 * 1000;
   lines.push(driverFresh
     ? '<span style="color:var(--success);">●</span> Driver: on-page command bar (an x.com tab is open and driving)'

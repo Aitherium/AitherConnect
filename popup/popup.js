@@ -418,6 +418,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  // OS Over Windows — the same Living OS overlay, drawn over the Windows desktop
+  // by awdesk (not over this page). Fails visibly when awdesk is not running.
+  $('btn-os-overlay-windows').addEventListener('click', async () => {
+    showFeedback('Opening the OS over the Windows desktop...', 'info', 0);
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'launch-os-overlay-windows' });
+      if (resp?.ok) {
+        showFeedback(resp.message || 'Overlay opened', 'success');
+      } else {
+        showFeedback(resp?.error || 'awdesk unavailable', 'error', 6000);
+      }
+    } catch (e) {
+      showFeedback('Error: ' + e.message, 'error', 5000);
+    }
+  });
+
   // Settings button — opens options page
   $('btn-settings').addEventListener('click', () => {
     chrome.runtime.openOptionsPage();

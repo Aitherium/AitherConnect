@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Unit tests for Awconnect shared modules",
   "scripts": {
-    "test": "node run-tests.mjs && node test-value-capture.mjs && node webml-sync.test.js && node navtabs-layout.test.mjs && node web-search-composition.test.mjs"
+    "test": "node run-tests.mjs && node test-value-capture.mjs && node webml-sync.test.js && node navtabs-layout.test.mjs && node web-search-composition.test.mjs && node local-endpoints.test.mjs && node awsync.test.mjs && node link-bundle.test.mjs"
   },
   "devDependencies": {
     "fake-indexeddb": "^6.0.0"

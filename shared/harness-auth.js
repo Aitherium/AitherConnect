@@ -76,7 +76,14 @@
    * @returns {Promise<Response>}
    */
   async function daemonFetch(path, options = {}) {
-    const baseUrl = "http://127.0.0.1:8362";
+    // The daemon's port can move: the aitheros launcher picks what it binds and
+    // publishes the map at :8899/connect.json. Ask it; 8362 stays the fallback so
+    // a box with no launcher behaves exactly as before.
+    const resolver = (typeof globalThis !== "undefined" && globalThis.AitherLocalEndpoints)
+      || (typeof self !== "undefined" && self.AitherLocalEndpoints)
+    const baseUrl = resolver
+      ? (await resolver.endpointFor("awsh")) || "http://127.0.0.1:8362"
+      : "http://127.0.0.1:8362";
     const url = new URL(path, baseUrl);
     const token = await readHarnessToken();
 

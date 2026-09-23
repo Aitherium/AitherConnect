@@ -706,6 +706,8 @@
 
     /* ── Decisions Panel ────────────────────────────────────────── */
 
+    .goals-header { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); margin: 12px 0 6px; }
+    .goals-container { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
     .decisions-container {
       flex: 1;
       overflow-y: auto;
@@ -2654,6 +2656,10 @@
 
   <!-- Decisions Panel -->
   <div class="panel" id="panel-decisions">
+    <div class="goals-header">Goals</div>
+    <div class="goals-container" id="goals-container">
+      <div class="decisions-empty">No active goals.</div>
+    </div>
     <div class="decisions-container" id="decisions-container">
       <div class="decisions-empty">No pending decisions. Good to go!</div>
     </div>

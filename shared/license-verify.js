@@ -207,7 +207,7 @@ async function verifyLicense(envelope, options = {}) {
       return {
         ok: false,
         tier: "free",
-        reason: "license not for aitherconnect",
+        reason: "license not for awconnect",
       };
     }
 

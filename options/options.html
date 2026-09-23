@@ -272,6 +272,13 @@
       </div>
     </div>
 
+    <div class="field" id="link-field">
+      <label>Link to aitherium.com</label>
+      <div class="hint">One sign-in: approve a code on aitherium.com. The platform owner gets the full endpoint and vault map; everyone else gets their own workspace, relay and sync.</div>
+      <button class="btn" id="btn-link" style="margin-top:6px;font-size:12px;">🔗 Link this browser</button>
+      <div id="link-status" style="margin-top:6px;font-size:12px;font-family:var(--font-mono);"></div>
+    </div>
+
     <div class="field" id="cloud-key-field">
       <label>Cloud API Key</label>
       <input type="password" id="cloudApiKey" placeholder="aither_sk_live_... or aither_pat_..." />
@@ -554,11 +561,33 @@
 
     <div class="toggle-row">
       <div>
+        <div class="toggle-label">Platform sync (awsync)</div>
+        <div class="toggle-hint">Hourly heartbeat + pack/licence tri-state against the platform. Off by default; a verdict nobody reads is not detection -- when on, drift pages as a notification.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="syncEnabled" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
         <div class="toggle-label">AitherOS Overlay (experimental)</div>
         <div class="toggle-hint">Iframes the Living OS chrome over the current page. Requires the site half (<code>?mode=overlay</code> + <code>os-regions</code>) to be live on the apex; until then the overlay paints an opaque desktop over the page. Leave off unless you are testing it.</div>
       </div>
       <label class="toggle-switch">
         <input type="checkbox" id="osOverlayEnabled" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Platform sync (awsync)</div>
+        <div class="toggle-hint">Hourly heartbeat to your platform, plus pack-update and licence checks. Reports this node's status and whether your local AI gateway is reachable, and tells you when you have drifted out of step &mdash; it deliberately stays quiet when everything is fine. Off by default: it sends telemetry upward, which is your call. Does nothing until a platform URL and a sign-in are configured.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="syncEnabled" />
         <span class="slider"></span>
       </label>
     </div>
@@ -578,6 +607,12 @@
   <!-- Social automation -->
   <div class="section">
     <h2>Social Automation (X)</h2>
+    <div id="x-fleet-banner" style="display:none;padding:10px 12px;background:rgba(46,204,113,0.12);border:1px solid var(--border);border-radius:6px;font-size:12px;margin-bottom:12px;">
+      <strong>X automation runs in the fleet (3.8.0).</strong> Posting, engagement and discovery now run
+      headless on the server — this browser is no longer required to keep the account active, and no
+      tab is ever opened in it for automation. Use <strong>Sync X session</strong> below when the fleet
+      asks for a fresh session. The toggles below are inert while fleet mode is on.
+    </div>
     <p class="desc">
       Autonomous posting and engagement on x.com, run in this logged-in browser.
       These are the <strong>only</strong> controls for it — nothing else may write them.

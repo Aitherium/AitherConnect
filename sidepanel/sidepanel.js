@@ -650,8 +650,9 @@
     // been installed mid-session).
     if (panel === "apps" && typeof loadExtensionApps === "function") loadExtensionApps();
 
-    // Load decisions when the decisions tab is opened
+    // Load decisions + goals when the decisions tab is opened
     if (panel === "decisions" && typeof loadDecisionsPanel === "function") loadDecisionsPanel();
+    if (panel === "decisions" && typeof loadGoalsPanel === "function") loadGoalsPanel();
   });
 
   // ====================================================================
@@ -5415,6 +5416,68 @@ ${res.error}
   }
 
   // ========================================================================
+  // GOALS PANEL — active goals + bound expeditions from genesis via the bridge
+  // ========================================================================
+  // The gap it closes: the extension consumed decisions but zero /goals —
+  // a human sits in this panel, and the goal→expedition plane had no surface
+  // here. Same bridge pattern as the twin's briefs-tab.js; fail-soft: a dead
+  // bridge or an empty list renders "no goals" — never an error wall.
+  // Ported into the SHIPPING tree 2026-09-06 from AitherConnect@HEAD (the
+  // twin's copy is under a peer's staged deletion).
+
+  async function loadGoalsPanel() {
+    const container = $("goals-container");
+    if (!container) return;
+    container.innerHTML = '<div class="decisions-loading">Loading goals…</div>';
+    try {
+      const goals = await fetchGoals();
+      if (!goals || goals.length === 0) {
+        container.innerHTML = '<div class="decisions-empty">No active goals.</div>';
+        return;
+      }
+      container.innerHTML = "";
+      goals.forEach((g) => {
+        const row = document.createElement("div");
+        row.className = "decision-card goal-card";
+        const status = g.status || "planning";
+        row.innerHTML =
+          '<div class="decision-title">' + esc(g.name || g.id) + "</div>" +
+          '<div class="decision-meta">' + status +
+          (g.expedition_id ? " · expedition " + esc(g.expedition_id.slice(0, 8)) : "") +
+          "</div>";
+        container.appendChild(row);
+      });
+    } catch (e) {
+      container.innerHTML = '<div class="decisions-empty">Goals unavailable: ' + esc(String(e.message || e)) + "</div>";
+    }
+  }
+
+  function fetchGoals() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(["settings"], (s) => {
+        const settings = (s && s.settings) || {};
+        if (settings.remoteUrl) {
+          const base = String(settings.remoteUrl).replace(/\/+$/, "");
+          resolve(fetchJson(base + "/api/bridge/genesis/goals/list", "omit"));
+        } else {
+          const veilPort = settings.veilPort || 3000;
+          resolve(fetchJson("http://127.0.0.1:" + veilPort + "/api/bridge/genesis/goals/list", "omit"));
+        }
+      });
+    }).then((data) => {
+      if (!data || !Array.isArray(data.goals)) return [];
+      return data.goals
+        .filter((g) => !["completed", "failed", "abandoned"].includes(g.status))
+        .slice(0, 8);
+    });
+  }
+
+  function fetchJson(url, creds) {
+    return fetch(url, { credentials: creds || "omit" }).then((r) =>
+      r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))
+    );
+  }
+
   // DECISIONS PANEL — pending decisions from the harness daemon
   // ========================================================================
 

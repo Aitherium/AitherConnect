@@ -14,8 +14,15 @@
  */
 
 // Import shared tier detection utility and portal API
-importScripts("shared/tier-detect.js", "shared/portal-api.js", "shared/health-debounce.js",
-  "shared/aitherbrowser.js", "shared/social-plan.js", "shared/harness-auth.js");
+importScripts("shared/webml-mirror/webml-memory.js"); // AITHER_WEBML_MEMORY (kit memory backend, mirrored)
+// local-endpoints FIRST: it tells every other local caller which ports this
+// boot actually chose (the launcher publishes :8899/connect.json). Without it
+// harness-auth dials its hardcoded 8362. 127.0.0.1, never localhost: ::1
+// refuses after 2120 ms while v4 connects in 3 ms (measured).
+importScripts("shared/local-endpoints.js",
+  "shared/tier-detect.js", "shared/portal-api.js", "shared/health-debounce.js",
+  "shared/aitherbrowser.js", "shared/social-plan.js", "shared/harness-auth.js",
+  "shared/awsync.js", "shared/link-bundle.js");
 
 // BYOK provider mode + local knowledge base (standalone, no fleet required).
 // Order matters: providers/feature-hash have no deps; embeddings needs both;
@@ -66,6 +73,7 @@ const DEFAULT_SETTINGS = {
   wikiProject: "",                       // LyraWiki name within the tenant (default = "default")
   workspaceId: "",                       // Workspace scope (X-Workspace-ID header)
   userId: "",                            // User identity (X-User-ID header)
+  syncEnabled: false,                   // awsync tri-state heartbeat/pack/licence -- opt-IN by a real control (AC001)
   standaloneMode: false,                 // Force standalone mode (Node ADK only) [legacy]
   autoHarvest: false,                    // Auto-capture page content on visit
   workspaceKnowledge: true,              // Route KB ingests through workspace knowledge API
@@ -112,6 +120,15 @@ const DEFAULT_SETTINGS = {
   // the gate is obsolete. aither-overlay-bridge.js now also CLIPS to os-regions,
   // so the OS chrome is live and every other pixel falls through without an
   // Alt+Space toggle.
+  // awsync: periodic heartbeat / pack-update / licence check against the
+  // platform. Ships OFF: it sends node telemetry upward, which is the user's
+  // call to make, not a default to assume. It has a REAL toggle in options
+  // (AC001 — "opt-in" with no opt-in control is just deleted, and this file
+  // already documents a fortnight lost to exactly that), and the tick is
+  // additionally a no-op with no platform or no credential configured, so
+  // enabling it without a platform heartbeats nowhere rather than at a
+  // default host.
+  syncEnabled: false,
   osOverlayEnabled: true,
   // The command bar: a full-width Aither bar injected into every page. It is
   // ALSO the only in-page driver for the X/LinkedIn social automation (see
@@ -890,9 +907,19 @@ async function xComposeText(promptOverride) {
         signal: AbortSignal.timeout(45000),
       });
       const d = await r.json().catch(() => ({}));
+      // `reasoning` / `reasoning_content` are the LAST resort, after every
+      // answer field. A reasoning model can return content:null with the whole
+      // monologue in the sibling field; reading only `content` then
+      // yields "" and the extension renders BLANK -- indistinguishable from the
+      // model having nothing to say. MicroScheduler splits these apart as of
+      // 2026-09-05, so `content` normally holds a real answer and this branch
+      // stays cold; it exists for backends that do not (ollama, custom, cloud).
       const t = d && (d.response || d.answer || d.text || d.message || d.content
         || (d.choices && d.choices[0] && (d.choices[0].text
-          || (d.choices[0].message && d.choices[0].message.content))));
+          || (d.choices[0].message && d.choices[0].message.content)))
+        || d.reasoning || d.reasoning_content
+        || (d.choices && d.choices[0] && d.choices[0].message
+            && (d.choices[0].message.reasoning || d.choices[0].message.reasoning_content)));
       if (t && String(t).trim()) {
         return String(t).trim().replace(/^["']|["']$/g, "").slice(0, 275);
       }
@@ -998,8 +1025,13 @@ async function askAither(prompt, backend) {
         signal: AbortSignal.timeout(90000),
       });
       const d = await resp.json().catch(() => ({}));
+      // Same ordering as the probe path above: every answer field first, the
+      // reasoning siblings only if none produced text. See that comment.
       const t = d.response || d.answer || d.text || d.message || d.content
-        || (d.choices && d.choices[0] && ((d.choices[0].message && d.choices[0].message.content) || d.choices[0].text));
+        || (d.choices && d.choices[0] && ((d.choices[0].message && d.choices[0].message.content) || d.choices[0].text))
+        || d.reasoning || d.reasoning_content
+        || (d.choices && d.choices[0] && d.choices[0].message
+            && (d.choices[0].message.reasoning || d.choices[0].message.reasoning_content));
       if (t && String(t).trim()) return String(t).trim();
       lastErr = d.error || d.detail || `HTTP ${resp.status}`;
     } catch (e) { lastErr = e.message; }
@@ -1430,6 +1462,21 @@ async function xPageDriverActive() {
 
 /** Find a credential and resolve the caller's identity.
  *  Never throws for an auth failure — returns {ok:false, ...} instead. */
+/**
+ * The role-aware link bundle (shared/link-bundle.js): what this browser gets
+ * from Genesis by the VERIFIED role -- the platform owner's endpoint map, vault
+ * routes and fleet control, or a regular user's bare bones. Refreshed after
+ * every successful sign-in, off the sign-in path: a slow Genesis must never
+ * delay identity, and a failure keeps the last good bundle.
+ */
+function refreshLinkBundle(token) {
+  const base = TIER_URLS && TIER_URLS.chatUrl;
+  if (!self.AitherLinkBundle || !base || !token) return;
+  self.AitherLinkBundle.refresh({ base, bearer: token })
+    .then((r) => { if (!r.ok) console.debug("[Awconnect] link bundle:", r.error); })
+    .catch(() => {});
+}
+
 async function resolveIdentity() {
   // 1. Find a token: settings API key > cloud gateway key > portal cookie.
   //    cloudApiKey is the credential pullEntitlement() uses (gateway-issued
@@ -1500,6 +1547,7 @@ async function resolveIdentity() {
           signal: AbortSignal.timeout(6000),
         });
         if (resp.ok) {
+          refreshLinkBundle(token);
           return { ok: true, source, identity: await resp.json(), token };
         }
         if (resp.status === 401 || resp.status === 403) {
@@ -1845,42 +1893,54 @@ async function listTenantApps() {
   };
 }
 
-/** (Re)create the X automation alarms.
+/** (Re)create the X/LinkedIn automation alarms — REMOVED in 3.8.0.
  *
- *  Called from BOTH onInstalled and onStartup. It used to live only in
- *  onInstalled: alarms do survive a browser restart, so that mostly worked —
- *  but "mostly" is the wrong guarantee for the thing that decides whether the
- *  account posts at all. If the alarm set is ever lost (profile copy, storage
- *  eviction, a disable/enable cycle that skips onInstalled) nothing recreates
- *  it and the automation is dead until a reinstall, with every UI still
- *  reporting "enabled". `chrome.alarms.create` on an existing name just
- *  rewrites it, so calling this repeatedly is free. */
+ *  The X and LinkedIn automation lanes moved to the FLEET (headless
+ *  AitherBrowser, routine-driven, no browser window). The extension no longer
+ *  creates the x-* and li-* alarms: posting, engagement, discovery and the
+ *  daily summary all run server-side now. Keeping them would double-post (the
+ *  fleet posts AND the extension posts) and would keep hijacking the owner's
+ *  own browser tabs — exactly what 3.8.0 exists to end.
+ *
+ *  What remains: the fleet-mode marker (the sidepanel renders from it) and the
+ *  alarms that are still the extension's job (health-check, tier-check,
+ *  decisions-poll — created in their own sections below). The Sync X session
+ *  path (xSessionSync) is unchanged: it is the sanctioned way to hand the
+ *  fleet a fresh session when X invalidates the stored one.
+ *
+ *  Belt-and-braces: if a stale x-* or li-* alarm somehow fires between the
+ *  update and its cleanup, the tick/engage/discover functions no-op on the
+ *  marker. */
 async function ensureXAlarms() {
-  const s = await chrome.storage.local.get([
-    "xAutopostIntervalMin", "xEngageIntervalMin", "xDiscoverIntervalMin",
-  ]);
-  const postMins = Number(s.xAutopostIntervalMin) || 180; // ~8/day default
-  chrome.alarms.create("x-autopost", { periodInMinutes: postMins, delayInMinutes: 1 });
-  // Engagement runs more often than posting — that's where growth comes from.
-  const engMins = Number(s.xEngageIntervalMin) || 60; // hourly default
-  chrome.alarms.create("x-engage", { periodInMinutes: engMins, delayInMinutes: 3 });
-  // Discovery: search topics, follow accounts, engage beyond the home feed.
-  const discMins = Number(s.xDiscoverIntervalMin) || 150; // ~every 2.5h
-  chrome.alarms.create("x-discover", { periodInMinutes: discMins, delayInMinutes: 5 });
-  // Daily digest: roll up the day's activity + follower trend into one notice.
-  chrome.alarms.create("x-daily-summary", { periodInMinutes: 1440, delayInMinutes: 10 });
-  // LinkedIn mirrors X — autonomous post/engage/discover, so the account runs
-  // even when no linkedin tab is open. The on-page bar (liPageDriverAt lease)
-  // drives instead when it is present; same model as X.
-  const liPostMins = Number(s.liAutopostIntervalMin) || 360;
-  chrome.alarms.create("li-autopost", { periodInMinutes: liPostMins, delayInMinutes: 2 });
-  const liEngMins = Number(s.liEngageIntervalMin) || 120;
-  chrome.alarms.create("li-engage", { periodInMinutes: liEngMins, delayInMinutes: 4 });
-  const liDiscMins = Number(s.liDiscoverIntervalMin) || 240;
-  chrome.alarms.create("li-discover", { periodInMinutes: liDiscMins, delayInMinutes: 6 });
+  await chrome.storage.local.set({ xAutomationMode: "fleet" });
+}
+
+/** (Re)create every alarm that IS still the extension's job.
+ *
+ *  Called from onInstalled, onStartup and the worker-wake path -- the AC004
+ *  class applied to what 3.8.0 left behind: after the x-* lanes moved to the
+ *  fleet, health-check / tier-check / awsync / decisions-poll were created
+ *  ONLY in onInstalled, so a lost alarm set left this node never reporting in
+ *  while every UI still said "connected" (measured 2026-09-21 -- AC004 had
+ *  been raising could-not-judge on the vanished x-* set instead of seeing it).
+ *  chrome.alarms.create on an existing name is a no-op, so this is idempotent. */
+async function ensureAlarms() {
+  chrome.alarms.create("health-check", { periodInMinutes: 0.5 });
+  chrome.alarms.create("tier-check", { periodInMinutes: 0.5 });
+  // awsync: created unconditionally, gated at TICK time on SETTINGS.syncEnabled.
+  chrome.alarms.create(AWSYNC_ALARM, { periodInMinutes: AWSYNC_PERIOD_MINUTES, delayInMinutes: 2 });
+  chrome.alarms.create("decisions-poll", { periodInMinutes: 1 });
+  await ensureXAlarms();
+}
+
+/** True when the X/LinkedIn automation runs in the fleet (3.8.0+ default). */
+async function ensureFleetMode() {
+  const s = await chrome.storage.local.get(["xAutomationMode"]);
+  return s.xAutomationMode === "fleet";
 }
 
 async function xEngageTick(force) {
+  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     await repairXKillSwitch();
     const s = await chrome.storage.local.get(["xEngageEnabled"]);
@@ -2110,6 +2170,7 @@ async function _xLoadTab(url) {
 }
 
 async function xDiscoverTick() {
+  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     const s = await chrome.storage.local.get(["xDiscoverEnabled", "xDiscoverTopicIdx"]);
     if (s.xDiscoverEnabled === false) return; // kill switch
@@ -2359,6 +2420,7 @@ async function liRecordFollows(n, today, used) {
 }
 
 async function liAutopostTick() {
+  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     const s = await chrome.storage.local.get(["liAutopostEnabled"]);
     if (s.liAutopostEnabled === false) return; // kill switch (user intent only)
@@ -2384,6 +2446,7 @@ async function liAutopostTick() {
 }
 
 async function liEngageTick() {
+  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     const s = await chrome.storage.local.get(["liEngageEnabled"]);
     if (s.liEngageEnabled === false) return;
@@ -2413,6 +2476,7 @@ async function liEngageTick() {
 }
 
 async function liDiscoverTick() {
+  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     const s = await chrome.storage.local.get(["liDiscoverEnabled", "liDiscoverTopicIdx"]);
     if (s.liDiscoverEnabled === false) return; // kill switch
@@ -3441,12 +3505,11 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     contexts: ["selection"],
   });
 
-  // Periodic health check + tier detection + decisions polling
-  chrome.alarms.create("health-check", { periodInMinutes: 0.5 });
-  chrome.alarms.create("tier-check", { periodInMinutes: 0.5 });
-  chrome.alarms.create("decisions-poll", { periodInMinutes: 1 });
-
-  await ensureXAlarms();
+  // Periodic health check + tier detection + awsync + decisions polling.
+  // Alarms usually survive a restart and "usually" is the wrong guarantee for
+  // the thing that decides whether this node reports in at all (AC004), so
+  // the same helper runs from onStartup and the worker-wake path too.
+  await ensureAlarms();
 
   await autoDetectTier();
   await syncRegisteredContentScripts();
@@ -3464,7 +3527,7 @@ chrome.runtime.onStartup.addListener(async () => {
   await loadProviderConfig();
   await autoDetectTier();
   await bootstrapCtaAdapters();
-  await ensureXAlarms();
+  await ensureAlarms();
   connectToGenesis();
   checkHealth();
   pullEntitlement().catch(() => {});
@@ -4048,11 +4111,111 @@ function sendRelayMessage(data) {
   return false;
 }
 
+/* ── awsync: keep this client in step with the platform ─────────────────────
+ *
+ * Consolidated in from the retired Python package (owner ruling 2026-08-19).
+ * The module (shared/awsync.js) is pure protocol; the family integrations
+ * are PORTS, and this is where they get bound to the things the extension
+ * can actually reach. Ported into the SHIPPING tree 2026-09-06: the ruling's
+ * original integration lived only in AitherConnect/, which nothing ships
+ * from -- the 1x gate's two-tree split.
+ *
+ * AND IT IS OPT-IN, BY A REAL CONTROL. `SETTINGS.syncEnabled` gates it (the
+ * options page toggle). The AC001 lesson from this very extension: a driver
+ * gated on a flag NOTHING can toggle is not "opt-in", it is DELETED. With no
+ * platform configured the tick does not fire at all rather than heartbeating
+ * at a default host.
+ */
+const AWSYNC_ALARM = "awsync-tick";
+const AWSYNC_PERIOD_MINUTES = 60;
+
+function awsyncIntegrations() {
+  return {
+    /* awnode / awsh / adk -- which local surfaces are reachable THIS boot,
+       reported through the launcher map (local-endpoints.js asks
+       :8899/connect.json, which is where the real ports live). Never
+       inferred: an unreachable gateway is exactly the condition the
+       platform wants in the heartbeat. */
+    collectServices: localServicesProbe,
+    /* awrelay -- a verdict nobody reads is not detection. Surfaced as a
+       notification because that is the channel this extension actually owns
+       on a user's machine; a relay channel is the platform-side equivalent. */
+    report: async (verdict) => {
+      try {
+        if (!chrome.notifications) return;
+        chrome.notifications.create("awsync-" + Date.now(), {
+          type: "basic",
+          iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+          title: verdict.exitCode === 1 ? "AitherOS: out of step" : "AitherOS: could not verify sync",
+          message: String(verdict.message || "").slice(0, 300),
+        });
+      } catch { /* notifications unavailable */ }
+    },
+    /* Strata / Nexus -- the host decides where an event lands. Kept local
+       until a tenant-scoped ingest path is configured: NX004's lesson is
+       that an event written with no tenant scope is unreachable by every
+       scoped read, so writing one anyway would be worse than not writing
+       it. */
+    onEvent: async (event) => {
+      try {
+        const { awsync_events = [] } = await chrome.storage.local.get("awsync_events");
+        awsync_events.push(event);
+        await chrome.storage.local.set({ awsync_events: awsync_events.slice(-100) });
+      } catch { /* storage full or unavailable */ }
+    },
+    // snapshot/restore (awrecover) and fetchArtifact (awshare) are
+    // deliberately UNBOUND here: neither has a browser-reachable
+    // implementation yet, and a stub that pretends to snapshot is worse than
+    // no snapshot -- applyUpdates fails CLOSED on a failing snapshot port,
+    // but a lying one would fail open.
+  };
+}
+
+/** Best-effort local-surface probe for the heartbeat's services map. */
+async function localServicesProbe() {
+  const out = {};
+  const resolver = (typeof globalThis !== "undefined" && globalThis.AitherLocalEndpoints)
+    || (typeof self !== "undefined" && self.AitherLocalEndpoints);
+  const names = ["awnode", "awsh", "adk"];
+  await Promise.all(names.map(async (name) => {
+    let base = null;
+    if (resolver) {
+      try { base = await resolver.endpointFor(name); } catch { base = null; }
+    }
+    if (!base) { out[name] = "absent"; return; }
+    try {
+      const res = await fetch(base + "/health", { signal: AbortSignal.timeout(1500) });
+      out[name] = res.ok ? "up" : "degraded";
+    } catch { out[name] = "unreachable"; }
+  }));
+  return out;
+}
+
+async function awsyncTick() {
+  if (!SETTINGS.syncEnabled) return;
+  const platformUrl = SETTINGS.portalUrl || (await self.AitherPortal.getPortalUrl());
+  const apiKey = (await self.AitherPortal.getPortalBearer()) || SETTINGS.apiKey;
+  // No credential or no platform => do not heartbeat into the void at a
+  // default host. Silence here is correct; a fabricated sync is not.
+  if (!platformUrl || !apiKey) return;
+  const client = new self.AwSync.SyncClient({
+    platformUrl,
+    apiKey,
+    tenantId: SETTINGS.tenantId || "",
+    nodeId: SETTINGS.userId || "aitherconnect",
+    integrations: awsyncIntegrations(),
+  });
+  await client.sync();
+}
+
 // =============================================================================
 // HEALTH CHECK
 // =============================================================================
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === AWSYNC_ALARM) {
+    await awsyncTick();
+  }
   if (alarm.name === "health-check") {
     await checkHealth();
     // Piggyback on the existing 30s cadence rather than adding another alarm.
@@ -4063,27 +4226,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "tier-check") {
     await autoDetectTier();
   }
-  if (alarm.name === "x-autopost") {
-    await xAutopostTick();
-  }
-  if (alarm.name === "x-engage") {
-    await xEngageTick();
-  }
-  if (alarm.name === "x-discover") {
-    await xDiscoverTick();
-  }
-  if (alarm.name === "x-daily-summary") {
-    await xDailySummaryTick();
-  }
-  if (alarm.name === "li-autopost") {
-    await liAutopostTick();
-  }
-  if (alarm.name === "li-engage") {
-    await liEngageTick();
-  }
-  if (alarm.name === "li-discover") {
-    await liDiscoverTick();
-  }
+  // 3.8.0: the x-* and li-* alarm branches were REMOVED — the automation
+  // lanes moved to the fleet (headless AitherBrowser). A stale alarm firing
+  // here would double-post; the tick/engage/discover functions no-op on the
+  // xAutomationMode marker as belt-and-braces.
   if (alarm.name === "decisions-poll") {
     await decisionsPollTick();
   }
@@ -4218,6 +4364,7 @@ async function decisionsPollTick() {
 // when an x.com tab is available (opens one if none), and lets xComposeText
 // write fresh text each time.
 async function xAutopostTick() {
+  if (await ensureFleetMode()) return; // 3.8.0: lane moved to the fleet
   try {
     await repairXKillSwitch();
     const s = await chrome.storage.local.get(["xAutopostEnabled"]);
@@ -7176,6 +7323,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })();
       return true;
 
+    // The OS overlay on the WINDOWS DESKTOP (not over a page): awdesk's Living
+    // Desktop window — the same aitherium.com `?mode=overlay` this extension
+    // iframes over pages, drawn over the OS instead (owner, 2026-09-08).
+    // awdesk listens on loopback (default 47931; the launcher's connect.json can
+    // move it) and raising a window on the owner's own screen needs no bearer.
+    case "launch-os-overlay-windows":
+      (async () => {
+        const resolver = (typeof self !== "undefined" && self.AitherLocalEndpoints) || globalThis.AitherLocalEndpoints;
+        const base = resolver ? ((await resolver.endpointFor("awdesk")) || "http://127.0.0.1:47931") : "http://127.0.0.1:47931";
+        try {
+          const resp = await fetch(`${base}/desktop/overlay`, { method: "POST", signal: AbortSignal.timeout(4000) });
+          if (resp.ok) {
+            sendResponse({ ok: true, message: "AitherOS overlay opened on the Windows desktop (awdesk)" });
+            return;
+          }
+          sendResponse({ ok: false, error: `awdesk answered HTTP ${resp.status}` });
+        } catch {
+          sendResponse({ ok: false, error: "awdesk is not running on this machine (start Desk, or `desk-start --overlay`)" });
+        }
+      })();
+      return true;
+
     case "launch-desktop":
       // AitherDesktop is a native PyQt6 app — browsers can't launch local processes.
       // Route: Extension → Native Launcher (localhost:8299) → subprocess.Popen
@@ -7184,7 +7353,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       (async () => {
         const LAUNCHER_PORT = 8299;
 
-        // Try native launcher FIRST (runs on host, can spawn processes)
+        // awdesk FIRST (2026-09-08): the full aitherium.com desktop (Desktop
+        // Anywhere shell) in awdesk's AitherDesktop window — the same desktop
+        // as aitherium.com, signed in with the owner's session. The native PyQt
+        // launcher below stays as the fallback for boxes without awdesk.
+        try {
+          const resolver = (typeof self !== "undefined" && self.AitherLocalEndpoints) || globalThis.AitherLocalEndpoints;
+          const base = resolver ? ((await resolver.endpointFor("awdesk")) || "http://127.0.0.1:47931") : "http://127.0.0.1:47931";
+          const resp = await fetch(`${base}/desktop/app`, { method: "POST", signal: AbortSignal.timeout(4000) });
+          if (resp.ok) {
+            sendResponse({ ok: true, message: "AitherDesktop opened in awdesk (aitherium.com desktop)" });
+            return;
+          }
+        } catch { /* awdesk not running: fall through to the native launcher */ }
+
+        // Try native launcher next (runs on host, can spawn processes)
         try {
           const launchBody = { mode: "overlay" };
           if (SETTINGS.tenantId || SETTINGS.workspaceId || SETTINGS.userId) {
@@ -7520,6 +7703,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       resolveIdentity().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
       return true;
 
+    // ── The role-aware link bundle: owner vs regular user (shared/link-bundle.js) ──
+    case "get-link-bundle":
+      self.AitherLinkBundle.current().then(
+        (bundle) => sendResponse({ ok: true, bundle, owner: self.AitherLinkBundle.isOwner(bundle) }),
+        (e) => sendResponse({ ok: false, error: e.message }));
+      return true;
+
     // ── Auto-apply resolved identity to settings ──
     case "apply-identity":
       applyIdentity(message.identity, message.token)
@@ -7570,6 +7760,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } catch (e) {
           sendResponse({ ok: false, error: e.message });
         }
+      })();
+      return true;
+
+    // ── Link to aitherium.com: the ONE sign-in (device grant) ────────
+    // Approve a code on aitherium.com; the Identity token that comes back is
+    // this extension's sign-in credential, identity is re-resolved, and the
+    // role-aware link bundle (owner vs user) is fetched with it.
+    case "link-start":
+      (async () => {
+        const portal = await getPortalUrl();
+        const res = await self.AitherLinkBundle.startLink({ portal });
+        if (res.ok && res.approveUrl) chrome.tabs.create({ url: res.approveUrl });
+        sendResponse(res);
+      })();
+      return true;
+
+    case "link-poll":
+      (async () => {
+        const portal = await getPortalUrl();
+        const res = await self.AitherLinkBundle.pollLink({ portal, deviceCode: message.device_code });
+        if (res.status !== "complete") return sendResponse(res);
+        await setPortalBearer(res.token);
+        const who = await resolveIdentity().catch((e) => ({ ok: false, error: e.message }));
+        const base = TIER_URLS && TIER_URLS.chatUrl;
+        const linked = base
+          ? await self.AitherLinkBundle.refresh({ base, bearer: res.token })
+          : { ok: false, error: "no Genesis endpoint reachable yet" };
+        sendResponse({
+          ok: true,
+          status: "complete",
+          identity: who && who.ok ? who.identity : null,
+          role: linked.ok ? linked.bundle.role : null,
+          bundleError: linked.ok ? null : linked.error,
+        });
       })();
       return true;
 
@@ -8889,7 +9113,7 @@ async function ensureOffscreenDocument() {
 // ON-DEVICE WEBGPU INFERENCE (aither-local provider)
 // =============================================================================
 // Dispatches chat to the offscreen inference host (offscreen-inference.js)
-// over the "offscreen-inference" port, speaking portal-kit's WebML wire
+// over the "offscreen-inference" port, speaking awkit's WebML wire
 // protocol (shared/webml-mirror/protocol.js), and re-emits the exact same
 // chat-event broadcasts the HTTP provider path produces — the sidepanel
 // needs zero changes.
@@ -8984,6 +9208,18 @@ async function handleLocalChat(message, providerDef, sendResponse) {
       console.debug("[Awconnect] KB retrieval skipped:", e.message);
     }
   }
+  // AITHER_WEBML_MEMORY — the kit's memory backend (shared/webml-mirror/webml-memory.js,
+  // mirrored by AitherVeil/scripts/build-workers.mjs; global AitherWebMLMemory). Same
+  // rules as aitherium.com: remember every turn, prepend a recall block. No sleep pass
+  // here — a service worker has no document/visibility; that arm stays on the pages.
+  const memory = self.AitherWebMLMemory ? self.AitherWebMLMemory.defaultChatMemory() : null;
+  if (memory) {
+    try {
+      const block = await memory.recallBlock("sidepanel", message.text);
+      if (block) messages.push({ role: "system", content: block });
+    } catch (e) { console.debug("[Awconnect] memory recall skipped:", e && e.message); }
+    void memory.remember("sidepanel", "user", message.text);
+  }
   messages.push({ role: "user", content: message.text });
 
   // Serialize against a concurrent preload/chat on the shared singleton
@@ -9074,6 +9310,7 @@ async function handleLocalChat(message, providerDef, sendResponse) {
         break;
       }
       case "done": {
+        try { if (memory) void memory.remember("sidepanel", "assistant", msg.text || fullContent); } catch { /* memory never breaks a turn */ }
         broadcastToSidePanel({ type: "chat-event", event: "complete", data: {
           type: "complete", content: msg.text || fullContent,
           model: modelLabel,
@@ -9642,15 +9879,15 @@ async function fleetKnowledgeIngest({ content, source, title, tags, collection, 
     // for exactly the reason this block already exists. A service worker recycles
     // constantly and neither of those events fires on a wake, so anything wired
     // only to them runs once a day at best:
-    //   * ensureXAlarms  — alarms usually survive, but if the set is ever lost
-    //     nothing restores it and the account stops posting permanently.
+    //   * ensureAlarms  — alarms usually survive, but if the set is ever lost
+    //     nothing restores it and this node stops reporting in permanently.
     //   * autoResolveIdentity — self-guards to a no-op once tenant/workspace/user
     //     are all set, so this costs nothing on the common path; without it a
     //     recycle leaves the workspace badge empty until the side panel is opened.
     //   * sweepInjectables — open tabs are bare after a recycle. On x.com that is
     //     not cosmetic: the bar is the in-page driver, so an un-swept tab is an
     //     automation that silently never runs.
-    await ensureXAlarms();
+    await ensureAlarms();
     autoResolveIdentity("worker-wake").catch(() => {});
     // Debounced: the sweep executeScripts into every open http(s) tab, and a
     // worker can wake many times a minute. Both injected scripts guard against
