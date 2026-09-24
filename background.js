@@ -704,6 +704,7 @@ async function loadFormbridgeConfig() {
     console.warn("[Awconnect] Could not load formbridge config:", e);
     FORMBRIDGE_CFG = null;
     API_CFG = null;
+    DISCOVERY_CFG = null;
   }
 }
 
