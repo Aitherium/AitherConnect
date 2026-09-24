@@ -110,27 +110,50 @@
     return { resp, data };
   }
 
-  /** Ask aitherium.com for a device code. The caller opens `approveUrl`. */
-  async function startLink({ portal, fetchImpl, timeoutMs = 10000 } = {}) {
-    const doFetch = fetchImpl || global.fetch;
-    if (!portal) return { ok: false, error: "no portal URL" };
-    try {
-      const base = String(portal).replace(/\/+$/, "");
-      const { resp, data } = await postJson(doFetch, `${base}/api/auth/device/code`, { client_name: "awconnect" }, timeoutMs);
-      if (!resp.ok || typeof data.device_code !== "string") {
-        return { ok: false, error: data.error || `device code: HTTP ${resp.status}` };
-      }
-      return {
-        ok: true,
-        deviceCode: data.device_code,
-        userCode: data.user_code || "",
-        approveUrl: data.verification_uri_complete || data.verification_uri || "",
-        interval: Number(data.interval) || 5,
-        expiresIn: Number(data.expires_in) || 900,
-      };
-    } catch (e) {
-      return { ok: false, error: `unreachable: ${(e && e.message) || e}` };
+  // Identity itself answers the device grant (idp.aitherium.com, measured 200 --
+  // but in 10.3 s on a loaded evening, so the budget is 25 s, not 10);
+  // the portal's /api/auth/device/* is Veil in front of it and was down (502/503)
+  // twice on the day this shipped. So ask Identity first and the portal only if
+  // Identity cannot be reached -- and poll the SAME host that issued the code.
+  const IDENTITY_DEFAULT = "https://idp.aitherium.com";
+
+  function hostsFor({ identity, portal }) {
+    const hosts = [];
+    const idp = String(identity || IDENTITY_DEFAULT).replace(/\/+$/, "");
+    hosts.push({ base: idp, code: "/auth/device/code", token: "/auth/device/token" });
+    if (portal) {
+      const pb = String(portal).replace(/\/+$/, "");
+      hosts.push({ base: pb, code: "/api/auth/device/code", token: "/api/auth/device/token" });
     }
+    return hosts;
+  }
+
+  /** Ask aitherium.com for a device code. The caller opens `approveUrl`. */
+  async function startLink({ identity, portal, fetchImpl, timeoutMs = 25000 } = {}) {
+    const doFetch = fetchImpl || global.fetch;
+    let lastError = "no Identity or portal to ask";
+    for (const h of hostsFor({ identity, portal })) {
+      try {
+        const { resp, data } = await postJson(doFetch, h.base + h.code, { client_name: "awconnect" }, timeoutMs);
+        if (!resp.ok || typeof data.device_code !== "string") {
+          lastError = data.detail || data.error || `device code: HTTP ${resp.status}`;
+          continue;
+        }
+        return {
+          ok: true,
+          deviceCode: data.device_code,
+          userCode: data.user_code || "",
+          approveUrl: data.verification_uri_complete || data.verification_uri || "",
+          interval: Number(data.interval) || 5,
+          expiresIn: Number(data.expires_in) || 900,
+          // The poll must go where the code came from.
+          tokenUrl: h.base + h.token,
+        };
+      } catch (e) {
+        lastError = `unreachable: ${(e && e.message) || e}`;
+      }
+    }
+    return { ok: false, error: lastError };
   }
 
   /**
@@ -138,19 +161,21 @@
    * {ok:true, status:"authorization_pending"|"slow_down", interval} while waiting;
    * {ok:false, status, error} when denied / expired / broken.
    */
-  async function pollLink({ portal, deviceCode, fetchImpl, timeoutMs = 10000 } = {}) {
+  async function pollLink({ tokenUrl, portal, deviceCode, fetchImpl, timeoutMs = 25000 } = {}) {
     const doFetch = fetchImpl || global.fetch;
-    if (!portal || !deviceCode) return { ok: false, status: "invalid", error: "missing portal or device code" };
+    const url = tokenUrl || (portal ? String(portal).replace(/\/+$/, "") + "/api/auth/device/token" : "");
+    if (!url || !deviceCode) return { ok: false, status: "invalid", error: "missing token URL or device code" };
     try {
-      const base = String(portal).replace(/\/+$/, "");
-      const { resp, data } = await postJson(doFetch, `${base}/api/auth/device/token`, { device_code: deviceCode }, timeoutMs);
+      const { resp, data } = await postJson(doFetch, url, { device_code: deviceCode }, timeoutMs);
       if (typeof data.access_token === "string" && data.access_token) {
         return { ok: true, status: "complete", token: data.access_token };
       }
-      if (resp.ok && (data.status === "authorization_pending" || data.status === "slow_down" || data.status === "pending")) {
-        return { ok: true, status: data.status === "pending" ? "authorization_pending" : data.status, interval: Number(data.interval) || 5 };
+      // Identity says it in `detail` (400); the portal in `status` (200).
+      const said = data.status || data.detail || data.error || "";
+      if (said === "authorization_pending" || said === "slow_down" || said === "pending") {
+        return { ok: true, status: said === "pending" ? "authorization_pending" : said, interval: Number(data.interval) || 5 };
       }
-      const why = data.error || data.status || `HTTP ${resp.status}`;
+      const why = said || `HTTP ${resp.status}`;
       return { ok: false, status: /denied/.test(why) ? "denied" : /expired/.test(why) ? "expired" : "error", error: why };
     } catch (e) {
       // A dropped poll is not a verdict: the caller keeps polling until the deadline.

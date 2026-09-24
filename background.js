@@ -7770,7 +7770,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "link-start":
       (async () => {
         const portal = await getPortalUrl();
-        const res = await self.AitherLinkBundle.startLink({ portal });
+        const res = await self.AitherLinkBundle.startLink({ portal, identity: SETTINGS.identityUrl });
         if (res.ok && res.approveUrl) chrome.tabs.create({ url: res.approveUrl });
         sendResponse(res);
       })();
@@ -7779,7 +7779,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "link-poll":
       (async () => {
         const portal = await getPortalUrl();
-        const res = await self.AitherLinkBundle.pollLink({ portal, deviceCode: message.device_code });
+        const res = await self.AitherLinkBundle.pollLink({
+          tokenUrl: message.token_url, portal, deviceCode: message.device_code,
+        });
         if (res.status !== "complete") return sendResponse(res);
         await setPortalBearer(res.token);
         const who = await resolveIdentity().catch((e) => ({ ok: false, error: e.message }));

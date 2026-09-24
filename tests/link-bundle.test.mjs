@@ -80,20 +80,34 @@ await check('no endpoint or no credential never calls out', async () => {
   assert.equal(called, false)
 })
 
-await check('startLink asks the portal for a device code and hands back the approve URL', async () => {
+await check('startLink asks Identity first and remembers where to poll', async () => {
   const calls = []
-  const res = await LB.startLink({ portal: 'https://p/', fetchImpl: async (url, init) => { calls.push([url, JSON.parse(init.body)]); return respond(200, { device_code: 'dc', user_code: 'ABCD-1234', verification_uri_complete: 'https://p/auth/device?c=ABCD-1234', interval: 3 })() } })
-  assert.deepEqual(calls[0], ['https://p/api/auth/device/code', { client_name: 'awconnect' }])
+  const res = await LB.startLink({ portal: 'https://p/', fetchImpl: async (url, init) => { calls.push([url, JSON.parse(init.body)]); return respond(200, { device_code: 'dc', user_code: 'ABCD-1234', verification_uri_complete: 'https://p/link?c=ABCD-1234', interval: 3 })() } })
+  assert.deepEqual(calls[0], ['https://idp.aitherium.com/auth/device/code', { client_name: 'awconnect' }])
+  assert.equal(calls.length, 1, 'the portal is not asked when Identity answers')
   assert.equal(res.ok, true)
   assert.equal(res.userCode, 'ABCD-1234')
-  assert.equal(res.approveUrl, 'https://p/auth/device?c=ABCD-1234')
-  assert.equal(res.interval, 3)
+  assert.equal(res.tokenUrl, 'https://idp.aitherium.com/auth/device/token')
 })
 
-await check('startLink reports a portal that is down, never a fake code', async () => {
+await check('startLink falls back to the portal when Identity is unreachable', async () => {
+  const res = await LB.startLink({ portal: 'https://p', fetchImpl: async (url) => { if (url.includes('idp.')) throw new Error('ECONNREFUSED'); return respond(200, { device_code: 'dc', user_code: 'X' })() } })
+  assert.equal(res.ok, true)
+  assert.equal(res.tokenUrl, 'https://p/api/auth/device/token')
+})
+
+await check('startLink reports when nobody can issue a code, never a fake one', async () => {
   const res = await LB.startLink({ portal: 'p', fetchImpl: respond(503, { error: 'Service Unavailable' }) })
   assert.equal(res.ok, false)
   assert.match(res.error, /Service Unavailable/)
+})
+
+await check('pollLink reads the Identity 400 detail as pending, and polls the issuing host', async () => {
+  let hit = ''
+  const res = await LB.pollLink({ tokenUrl: 'https://idp/auth/device/token', deviceCode: 'dc', fetchImpl: async (url) => { hit = url; return respond(400, { detail: 'authorization_pending' })() } })
+  assert.equal(hit, 'https://idp/auth/device/token')
+  assert.deepEqual([res.ok, res.status], [true, 'authorization_pending'])
+  assert.equal((await LB.pollLink({ tokenUrl: 'https://idp/t', deviceCode: 'dc', fetchImpl: respond(400, { detail: 'access_denied' }) })).status, 'denied')
 })
 
 await check('pollLink: pending, then the Identity token on approval', async () => {

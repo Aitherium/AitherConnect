@@ -1354,7 +1354,9 @@ $("btn-link")?.addEventListener("click", async () => {
       btn.disabled = false;
       return;
     }
-    const poll = await chrome.runtime.sendMessage({ type: "link-poll", device_code: start.deviceCode });
+    const poll = await chrome.runtime.sendMessage({
+      type: "link-poll", device_code: start.deviceCode, token_url: start.tokenUrl,
+    });
     if (poll?.status === "complete") {
       const who = poll.identity?.username || poll.identity?.email || "you";
       const role = poll.role === "owner" ? "platform owner — full access" : poll.role === "user" ? "linked" : `signed in (${poll.bundleError || "role pending"})`;
