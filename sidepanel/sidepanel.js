@@ -3956,6 +3956,9 @@ ${res.error}
       }
     }
 
+    const purgeBtn = $("app-formbridge-purge");
+    if (purgeBtn) purgeBtn.style.display = isFb ? "" : "none";
+
     // API Capture button — visible when FormBridge is open
     const apiBtn = $("app-connect-api");
     if (apiBtn) {
@@ -4250,6 +4253,36 @@ ${res.error}
     if (b && b.dataset.on === "1") disableFormbridgeDiscovery();
     else enableFormbridgeDiscovery();
   });
+
+  // Owner-initiated purge — the 05-API-DESIGN `formbridge-purge` message
+  // (side panel → service worker → loopback engine POST /formbridge/purge).
+  // Blank = everything; a patient key purges only that patient.
+  async function purgeFormbridgeData() {
+    const btn = $("app-formbridge-purge");
+    const answer = prompt(
+      "Purge FormBridge data from this machine.\n\n" +
+      "Enter a patient key to purge one patient, or type ALL to purge every " +
+      "captured record and filled form.", "");
+    if (answer === null) return;
+    const key = answer.trim();
+    if (!key) return;
+    const all = key.toUpperCase() === "ALL";
+    try {
+      if (btn) { btn.disabled = true; btn.textContent = "Purging…"; }
+      const r = await chrome.runtime.sendMessage(
+        all ? { type: "formbridge-purge", all: true } : { type: "formbridge-purge", patientKey: key });
+      if (!r || !r.ok) throw new Error((r && r.error) || "no response from the service worker");
+      addEvent("FORMBRIDGE", all ? "Purged all captured data" : `Purged data for ${key}`);
+      if (appEmbedFrame && appEmbedFrame.src) appEmbedFrame.src = appEmbedFrame.src;
+    } catch (e) {
+      addEvent("FORMBRIDGE", `Purge failed: ${e.message}`);
+      alert(`Purge: ${e.message}`);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "🗑 Purge data"; }
+    }
+  }
+
+  $("app-formbridge-purge") && $("app-formbridge-purge").addEventListener("click", purgeFormbridgeData);
 
   $("app-connect-api") && $("app-connect-api").addEventListener("click", () => {
     const b = $("app-connect-api");

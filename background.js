@@ -2793,6 +2793,36 @@ async function formbridgeEnginePost(path, body) {
   return false;
 }
 
+// Owner-initiated purge (05-API-DESIGN `formbridge-purge`: sidepanel → SW → engine).
+// Only an extension page (the side panel) may ask: a content script runs inside the
+// EHR tab (sender.tab is set), so page-context code can never wipe the office's
+// captures. The request names ONE patient or says `all: true` explicitly — a
+// missing key is refused, never read as "purge everything". Captures still queued
+// in chrome.storage (engine was down) are PHI too, so they are scrubbed here first.
+async function formbridgePurge(message, sender) {
+  const extBase = chrome.runtime.getURL("");
+  const fromExtensionPage = !!sender && sender.id === chrome.runtime.id && !sender.tab &&
+    typeof sender.url === "string" && sender.url.startsWith(extBase);
+  if (!fromExtensionPage) return { ok: false, error: "formbridge-purge is side-panel only" };
+  const all = message.all === true;
+  const patientKey = typeof message.patientKey === "string" ? message.patientKey.trim() : "";
+  if (all === !!patientKey) {
+    return { ok: false, error: "formbridge-purge needs exactly one of patientKey or all:true" };
+  }
+  const before = formbridgeQueue.length;
+  formbridgeQueue = all ? [] : formbridgeQueue.filter((b) => !b || b.patient_key !== patientKey);
+  const queuedDropped = before - formbridgeQueue.length;
+  if (queuedDropped) {
+    try {
+      await chrome.storage.local.set({ "aither-formbridge-queue": formbridgeQueue });
+    } catch { /* best-effort; the in-memory queue is already scrubbed */ }
+  }
+  const engineOk = await formbridgeEnginePost("/formbridge/purge", all ? {} : { patient_key: patientKey });
+  return engineOk
+    ? { ok: true, queuedDropped }
+    : { ok: false, queuedDropped, error: "no FormBridge engine reachable on loopback" };
+}
+
 async function formbridgeForward(batch) {
   const body = { ...batch };
   if (formbridgeSelectorsSeen.length) {
@@ -8133,6 +8163,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, queued: true, pending: formbridgeQueue.length });
         }
       })();
+      return true;
+
+    case "formbridge-purge":
+      formbridgePurge(message, sender)
+        .then(sendResponse)
+        .catch((e) => sendResponse({ ok: false, error: e.message }));
       return true;
 
     case "form-capture-selfcheck":
