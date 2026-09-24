@@ -1335,6 +1335,34 @@ function linkStatus(text, color) {
   el.appendChild(span);
 }
 
+// A tenant user's home is THEIR portal (garg.aitherium.com, ...), not aitherium.com.
+function showLinkHome(home) {
+  const el = $("link-status");
+  if (!el || !home || !/^https:\/\//.test(home.url || "")) return;
+  const line = document.createElement("div");
+  line.style.marginTop = "4px";
+  const a = document.createElement("a");
+  a.href = home.url;
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.textContent = home.tenant ? `Open ${home.name}` : "Open your workspace";
+  line.appendChild(document.createTextNode(home.tenant ? `Home: ${home.name} — ` : ""));
+  line.appendChild(a);
+  el.appendChild(line);
+}
+
+(async () => {
+  try {
+    const st = await chrome.runtime.sendMessage({ type: "link-state" });
+    if (!st?.linked) return;
+    const role = st.role === "owner" ? "platform owner — full access" : "linked";
+    linkStatus(`✓ ${st.username || "you"}: ${role}${st.home?.tenant ? ` on ${st.home.name}` : ""}`, "success");
+    showLinkHome(st.home);
+  } catch (e) {
+    console.debug("[link] state unavailable:", e && e.message);
+  }
+})();
+
 $("btn-link")?.addEventListener("click", async () => {
   const btn = $("btn-link");
   btn.disabled = true;
@@ -1361,6 +1389,7 @@ $("btn-link")?.addEventListener("click", async () => {
       const who = poll.identity?.username || poll.identity?.email || "you";
       const role = poll.role === "owner" ? "platform owner — full access" : poll.role === "user" ? "linked" : `signed in (${poll.bundleError || "role pending"})`;
       linkStatus(`✓ ${who}: ${role}`, "success");
+      showLinkHome(poll.home);
       btn.disabled = false;
       return;
     }

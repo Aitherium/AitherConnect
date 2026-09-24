@@ -83,6 +83,25 @@
     return isBundle(b) ? b : null;
   }
 
+  /**
+   * Where this linked person's HOME is. A tenant user (garg, dgg, jgames, ...)
+   * is homed on their tenant's portal -- the server decides that from the
+   * verified token and says so in `tenant` / `endpoints.portal`. Only an https
+   * URL is ever returned, so nothing a bundle carries can open another scheme.
+   */
+  function homeFor(bundle) {
+    if (!isBundle(bundle)) return null;
+    const t = bundle.tenant && typeof bundle.tenant === "object" ? bundle.tenant : null;
+    const eps = bundle.endpoints || {};
+    const raw = String(eps.portal || (t && t.portal) || eps.workspace || "");
+    const url = /^https:\/\/[^\s/]+/.test(raw) ? raw : "";
+    return {
+      tenant: t ? String(t.id || "") : "",
+      name: t ? String(t.name || t.id || "") : "Aitherium",
+      url: url || "https://aitherium.com/workspace",
+    };
+  }
+
   /** True only for a bundle the server marked owner. */
   function isOwner(bundle) {
     return isBundle(bundle) && bundle.role === "owner";
@@ -183,5 +202,5 @@
     }
   }
 
-  global.AitherLinkBundle = { refresh, current, isOwner, startLink, pollLink, STORAGE_KEY, PATH };
+  global.AitherLinkBundle = { refresh, current, isOwner, homeFor, startLink, pollLink, STORAGE_KEY, PATH };
 })(typeof globalThis !== "undefined" ? globalThis : self);

@@ -7895,8 +7895,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           status: "complete",
           identity: who && who.ok ? who.identity : null,
           role: linked.ok ? linked.bundle.role : null,
+          home: linked.ok ? self.AitherLinkBundle.homeFor(linked.bundle) : null,
           bundleError: linked.ok ? null : linked.error,
         });
+      })();
+      return true;
+
+    // What Options shows on open: the stored bundle's role and HOME (a tenant
+    // user's own portal). Never a token.
+    case "link-state":
+      (async () => {
+        const b = await self.AitherLinkBundle.current();
+        sendResponse(b ? {
+          linked: true,
+          role: b.role,
+          username: (b.identity && (b.identity.username || b.identity.email)) || "",
+          home: self.AitherLinkBundle.homeFor(b),
+        } : { linked: false });
       })();
       return true;
 

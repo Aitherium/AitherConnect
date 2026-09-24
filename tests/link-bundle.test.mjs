@@ -124,6 +124,31 @@ await check('pollLink: denied and expired are final; a dropped poll is not', asy
   assert.deepEqual([dropped.ok, dropped.status], [true, 'authorization_pending'])
 })
 
+await check('a tenant bundle is homed on the tenant portal', async () => {
+  const b = { role: 'user', identity: { username: 'g' }, tenant: { id: 'garg', name: 'GARG', portal: 'https://garg.aitherium.com' }, endpoints: { portal: 'https://garg.aitherium.com', workspace: 'https://garg.aitherium.com' } }
+  assert.deepEqual({ ...LB.homeFor(b) }, { tenant: 'garg', name: 'GARG', url: 'https://garg.aitherium.com' })
+})
+
+await check('a platform bundle is homed on aitherium.com', async () => {
+  const b = { role: 'user', identity: { username: 'u' }, endpoints: { workspace: 'https://aitherium.com/workspace' } }
+  assert.deepEqual({ ...LB.homeFor(b) }, { tenant: '', name: 'Aitherium', url: 'https://aitherium.com/workspace' })
+})
+
+await check('a non-https home is never offered, and a non-bundle has no home', async () => {
+  const b = { role: 'user', identity: {}, tenant: { id: 'x', name: 'X' }, endpoints: { portal: 'javascript:alert(1)' } }
+  assert.equal(LB.homeFor(b).url, 'https://aitherium.com/workspace')
+  assert.equal(LB.homeFor({ role: 'admin' }), null)
+})
+
+await check('background answers link-state and returns the home on link', async () => {
+  const bg = readFileSync(join(here, '..', 'background.js'), 'utf8')
+  assert.match(bg, /case "link-state":/)
+  assert.match(bg, /home: linked\.ok \? self\.AitherLinkBundle\.homeFor\(linked\.bundle\)/)
+  const opt = readFileSync(join(here, '..', 'options', 'options.js'), 'utf8')
+  assert.match(opt, /type: "link-state"/)
+  assert.match(opt, /showLinkHome\(poll\.home\)/)
+})
+
 await check('background.js loads the module', async () => {
   const bg = readFileSync(join(here, '..', 'background.js'), 'utf8')
   assert.match(bg, /importScripts\([^)]*shared\/link-bundle\.js/s)
