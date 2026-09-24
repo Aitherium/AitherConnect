@@ -1127,6 +1127,14 @@ $("btn-start-trial").addEventListener("click", async () => {
   statusEl.innerHTML = '<span style="color:var(--text-muted);">Starting trial...</span>';
 
   try {
+    // The gateway counts trials per mailbox and per network (w1b-18-09), so an
+    // email is required -- a fresh install-id alone no longer mints a trial.
+    const email = ($("trial-email").value || "").trim();
+    if (!email || !email.includes("@")) {
+      statusEl.innerHTML = '<span style="color:var(--error);">✕ Enter your email to start a trial</span>';
+      return;
+    }
+
     // Ensure install-id exists
     let { "aither-install-id": installId } = await chrome.storage.local.get("aither-install-id");
     if (!installId) {
@@ -1139,7 +1147,7 @@ $("btn-start-trial").addEventListener("click", async () => {
     const resp = await fetch(`${gateway}/v1/connect/license/trial`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ install_id: installId }),
+      body: JSON.stringify({ install_id: installId, email }),
     });
 
     const json = await resp.json();
