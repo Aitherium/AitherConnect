@@ -618,6 +618,76 @@ function providerConfigured() {
 let FORMBRIDGE_CFG = null;
 let DISCOVERY_CFG = null;          // { origin } when Discovery mode is on
 let API_CFG = null;                // { origin } when API capture is active
+
+// Build variant (15-DELIVERY §2A). The public store build strips every HAR /
+// capture / value-mining script (CAPTURE_FILES in scripts/build-connect-dist.sh
+// and Build-Distributions.ps1) and its manifest never carries the "*://*/*"
+// optional host grant (both scripts' leak guard assert it). Anything that would
+// inject or accept capture data checks this first, so the public build refuses
+// cleanly instead of registering a missing file (which fails the WHOLE
+// registerContentScripts batch, site packs included).
+function isEnterpriseBuild() {
+  try {
+    const opt = chrome.runtime.getManifest().optional_host_permissions || [];
+    return opt.includes("*://*/*");
+  } catch {
+    return false;
+  }
+}
+
+function publicBuildRefusal() {
+  return { ok: false, error: "not available in the public build (enterprise variant only)" };
+}
+
+// 03-USER-STORIES non-goal: no write-back / DOM automation into the EHR. The
+// no-submit prefill serves the civic CTA flow; it is refused on any origin a
+// FormBridge pack (capture, API capture or discovery) is bound to.
+function isFormbridgePackOrigin(origin, cfgs) {
+  const host = (o) => {
+    try { return new URL(o).hostname.toLowerCase(); } catch { return ""; }
+  };
+  const target = host(origin);
+  if (!target) return false;
+  for (const cfg of cfgs || [FORMBRIDGE_CFG, API_CFG, DISCOVERY_CFG]) {
+    if (cfg && cfg.origin && host(cfg.origin) === target) return true;
+  }
+  return false;
+}
+
+// Gate for BOTH cta-prefill entry points. Returns an error string (refuse) or
+// null (allow). The tab is opened at pkg.url and the prefill script injected
+// there, so the judged origin is pkg.url's, and pkg.origin (which the permission
+// check uses) must be that same origin. The pack bindings are read from storage
+// on every call: on a cold service-worker wake the in-memory configs are still
+// null, and a storage failure refuses (fail closed).
+async function prefillRefusal(pkg) {
+  let target;
+  try {
+    const u = new URL(pkg.url);
+    if (u.protocol !== "https:" && u.protocol !== "http:") {
+      return "Prefill refused: package url must be http(s)";
+    }
+    target = u.origin;
+    if (new URL(pkg.origin).origin !== target) {
+      return "Prefill refused: package url origin does not match package origin";
+    }
+  } catch {
+    return "Invalid prefill package: url/origin not parseable";
+  }
+  let cfgs;
+  try {
+    const stored = await chrome.storage.local.get(
+      ["aither-formbridge-pack", "aither-formbridge-discovery", "aither-formbridge-api"]);
+    cfgs = [stored["aither-formbridge-pack"], stored["aither-formbridge-discovery"],
+            stored["aither-formbridge-api"], FORMBRIDGE_CFG, API_CFG, DISCOVERY_CFG];
+  } catch {
+    return "Prefill refused: FormBridge pack bindings could not be read";
+  }
+  if (isFormbridgePackOrigin(target, cfgs)) {
+    return "Prefill is refused on a FormBridge pack origin (no write-back into the EHR)";
+  }
+  return null;
+}
 let formbridgeQueue = [];          // batches awaiting a reachable local engine
 let formbridgeSelectorsSeen = [];  // latest self-check report, attached to next batch
 const FORMBRIDGE_QUEUE_MAX = 200;
@@ -2964,7 +3034,7 @@ async function syncRegisteredContentScripts() {
   // FormBridge (vertical pack): value capture for EXACTLY the pack's origin.
   // Requires an installed pack config (with the mandatory anchor) AND the
   // user-granted host permission for that one origin. Never broad-matched.
-  if (FORMBRIDGE_CFG && FORMBRIDGE_CFG.origin && FORMBRIDGE_CFG.anchor && FORMBRIDGE_CFG.anchor.selector) {
+  if (isEnterpriseBuild() && FORMBRIDGE_CFG && FORMBRIDGE_CFG.origin && FORMBRIDGE_CFG.anchor && FORMBRIDGE_CFG.anchor.selector) {
     // Chrome match patterns CANNOT contain a port — a port-less pattern matches
     // all ports on the host. So a pack origin like http://localhost:8910 must
     // register as http://localhost/* (still covered by the manifest's
@@ -2990,7 +3060,7 @@ async function syncRegisteredContentScripts() {
 
   // FormBridge Discovery: scrape DOM fields + intercept the EHR's own JSON
   // (MAIN world) to build a pack's selectors. ONLY when Discovery mode is on.
-  if (DISCOVERY_CFG && DISCOVERY_CFG.origin) {
+  if (isEnterpriseBuild() && DISCOVERY_CFG && DISCOVERY_CFG.origin) {
     let dOrigin;
     try {
       const u = new URL(DISCOVERY_CFG.origin);
@@ -3016,7 +3086,7 @@ async function syncRegisteredContentScripts() {
   // FormBridge API Capture: intercept the EHR's own JSON/RTF responses
   // (MAIN world) to extract data via the API_CFG.source.api map. ONLY when
   // an API-capture pack is active for this origin.
-  if (API_CFG && API_CFG.origin) {
+  if (isEnterpriseBuild() && API_CFG && API_CFG.origin) {
     let aOrigin;
     try {
       const u = new URL(API_CFG.origin);
@@ -4892,6 +4962,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 async function harStart(tabId, redact) {
+  if (!isEnterpriseBuild()) return publicBuildRefusal();
   harCapture.active = true;
   harCapture.tabId = tabId;
   harCapture.redact = redact !== false;
@@ -8141,6 +8212,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // ── FormBridge: capture batches from value-capture.js → local engine ──
     case "form-capture":
+      if (!isEnterpriseBuild()) { sendResponse(publicBuildRefusal()); return false; }
       (async () => {
         const batch = message.batch;
         if (!batch || !batch.patient_key || !Array.isArray(batch.fields)) {
@@ -8178,6 +8250,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // API Capture: forward a captured API response to the local engine for extraction.
     case "form-capture-api":
+      if (!isEnterpriseBuild()) { sendResponse(publicBuildRefusal()); return false; }
       (async () => {
         const { url, body, rtf, source_origin } = message;
         try {
@@ -8194,6 +8267,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // Discovery: forward a scraped field inventory (DOM + API) to the local engine.
     case "form-discover":
+      if (!isEnterpriseBuild()) { sendResponse(publicBuildRefusal()); return false; }
       (async () => {
         await formbridgeEnginePost("/formbridge/discover", {
           origin: message.origin, dom: message.dom || [], api: message.api || [],
@@ -8720,6 +8794,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
           }
 
+          const refusal = await prefillRefusal(pkg);
+          if (refusal) {
+            sendResponse({ ok: false, error: refusal });
+            return;
+          }
+
           // Request permission for the target origin if not already granted.
           const permissionGranted = await chrome.permissions.contains({
             origins: [pkg.origin + "/*"],
@@ -8846,6 +8926,12 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
             ok: false,
             error: "Invalid prefill package: missing url, origin, or fields",
           });
+          return;
+        }
+
+        const refusal = await prefillRefusal(pkg);
+        if (refusal) {
+          sendResponse({ ok: false, error: refusal });
           return;
         }
 
