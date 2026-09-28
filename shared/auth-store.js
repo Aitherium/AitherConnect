@@ -8,6 +8,7 @@
  *     source,        // 'awdk' | 'oidc'
  *     user: { id, username, display_name, tenant_slug },
  *     gateway_key?,  // a gateway key, kept apart: it is never a user bearer
+ *     expired?,      // true when a silent re-auth failed: show "Sign in again"
  *   }
  *
  * The local rung: the awdk daemon on 127.0.0.1 answers /identity/whoami and
@@ -58,6 +59,8 @@
       },
     };
     if (rec.gateway_key) clean.gateway_key = rec.gateway_key;
+    // A session that could not be renewed silently: the UI says "Sign in again".
+    if (rec.expired && !clean.user_bearer) clean.expired = true;
     await s.set({ [KEY]: clean });
     return clean;
   }

@@ -5,10 +5,13 @@
  *         harness daemon (:8362) and the MCP gateway (:8182); when none answers,
  *         show the one-line awdk+awsh installer with "Check again".
  *         "Just use an API key" (BYOK) stays one click away.
- * Step 1  Sign in, passwordless: "Sign in with Aitherium" runs Identity's device
- *         flow (the endpoints `adk login` uses); "Email me a sign-in link" is the
- *         same flow with the account's address, so Identity mails a one-tap
- *         approve link. The password form sits behind "Use a password instead".
+ * Step 1  Sign in. First, with no click: a local awdk that already ran
+ *         `adk login` hands this browser a session (auth-local-sign-in).
+ *         "Sign in with Aitherium" runs OIDC + PKCE in Chrome's sign-in window
+ *         (auth-oidc-sign-in), so a store user with no awdk signs in once.
+ *         "Sign in with a code instead" is Identity's device flow; "Email me a
+ *         sign-in link" is that flow with the account's address. A gateway API
+ *         key sits behind "Advanced: API key"; signing in derives one anyway.
  *         With AitherOS local, "Skip - use this computer only" needs no account.
  * Step 2  Mode + provision (unchanged).
  *
@@ -426,6 +429,21 @@ async function initPortal() {
     }
   }
 
+  // Signed in already (a local `adk login`, or an earlier sign-in here)? Then
+  // there is nothing to click.
+  const auth = await bg({ type: "auth-state" });
+  $("signin-again").classList.toggle("hidden", !(auth && auth.expired));
+  if (state.local && state.local.adk && state.local.adk.ok && !(auth && auth.signed_in)) {
+    const local = await bg({ type: "auth-local-sign-in" });
+    if (local && local.ok && local.cloud) {
+      signedIn(local.identity, "this computer's sign-in");
+      return;
+    }
+  } else if (auth && auth.signed_in) {
+    signedIn(auth.user, "your earlier sign-in");
+    return;
+  }
+
   // Hide the email option when Identity says it cannot send mail; say so plainly
   // when Identity does not answer at all.
   const methods = await Flow.authMethods({ fetch: (u, o) => fetch(u, o), identityUrl: identityUrl() });
@@ -448,6 +466,56 @@ $("open-signup").addEventListener("click", (e) => {
   e.preventDefault();
   const url = $("portal-url").value.trim() || P.PORTAL_DEFAULT_URL;
   chrome.tabs.create({ url: `${url.replace(/\/+$/, "")}/signup` });
+});
+
+/** Ask the service worker; resolves null instead of throwing. */
+function bg(message) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(message, (r) => {
+        void chrome.runtime.lastError;
+        resolve(r || null);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function signedIn(user, how) {
+  const name = user && (user.display_name || user.username);
+  state.user = user ? { ...user } : state.user;
+  msg("portal-message", `Signed in${name ? ` as ${name}` : ""} with ${how}.`, "success");
+  setTimeout(() => initPortalMode(), 350);
+}
+
+async function runOidcSignIn() {
+  msg("portal-message", "");
+  $("oidc-sign-in").disabled = true;
+  try {
+    const r = await bg({ type: "auth-oidc-sign-in" });
+    if (!r || !r.ok) {
+      const why = (r && r.error) || "";
+      if (/closed|cancel|did not approve|user/i.test(why)) {
+        msg("portal-message", "Sign-in was cancelled. Try again, or use a code instead.", "warn");
+      } else {
+        msg("portal-message", `Could not sign in: ${why || Flow.UNREACHABLE_MESSAGE}`, "warn");
+      }
+      return;
+    }
+    $("signin-again").classList.add("hidden");
+    signedIn(r.identity, "Aitherium");
+  } catch (e) {
+    msg("portal-message", Flow.UNREACHABLE_MESSAGE, "warn");
+  } finally {
+    $("oidc-sign-in").disabled = false;
+  }
+}
+
+$("oidc-sign-in").addEventListener("click", runOidcSignIn);
+$("open-gateway-settings").addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.runtime.openOptionsPage();
 });
 
 async function runDeviceSignIn({ email } = {}) {

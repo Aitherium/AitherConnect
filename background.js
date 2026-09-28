@@ -20,7 +20,7 @@ importScripts("shared/webml-mirror/webml-memory.js"); // AITHER_WEBML_MEMORY (ki
 // harness-auth dials its hardcoded 8362. 127.0.0.1, never localhost: ::1
 // refuses after 2120 ms while v4 connects in 3 ms (measured).
 importScripts("shared/local-endpoints.js",
-  "shared/extension-id.js", "shared/auth-store.js",
+  "shared/extension-id.js", "shared/auth-store.js", "shared/oidc-pkce.js",
   "shared/tier-detect.js", "shared/portal-api.js", "shared/health-debounce.js",
   "shared/aitherbrowser.js", "shared/social-plan.js", "shared/harness-auth.js",
   "shared/awsync.js", "shared/link-bundle.js", "shared/product-catalog.js");
@@ -1581,6 +1581,70 @@ async function resolveFromLocalAdk() {
     return { ok: false, error: e.message };
   }
 }
+
+/** A gateway key for a signed-in user, so nobody pastes one. The gateway mints
+ *  a durable aither_sk_* key for the user bearer; it lands in the auth record
+ *  (gateway_key) and in SETTINGS.cloudApiKey, which the tier probe reads.
+ *  Returns the key, or "" when the gateway refused. The key is never logged. */
+async function deriveGatewayKey(userBearer) {
+  if (!userBearer) return "";
+  const gateway = SETTINGS.cloudGatewayUrl || "https://gateway.aitherium.com";
+  try {
+    const kr = await fetch(`${gateway}/v1/auth/api-key`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${userBearer}` },
+      body: JSON.stringify({ name: "Awconnect" }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!kr.ok) return "";
+    const key = (await kr.json())?.api_key || "";
+    if (!key) return "";
+    const AS = self.AitherAuthStore;
+    const rec = AS ? await AS.get() : null;
+    if (AS && rec) await AS.set({ ...rec, gateway_key: key });
+    await saveSettings({ ...SETTINGS, cloudApiKey: key });
+    return key;
+  } catch {
+    return "";
+  }
+}
+
+/** After any sign-in rung stored a user bearer: publish it, derive the gateway
+ *  key, and re-probe the tier. Shared by the OIDC and local-awdk paths. */
+async function afterUserSignIn(token) {
+  if (!token) return { gateway_key: false };
+  try { await self.AitherPortal.setPortalBearer(token); } catch { /* no storage */ }
+  refreshLinkBundle(token);
+  let gk = "";
+  const rec = self.AitherAuthStore ? await self.AitherAuthStore.get().catch(() => null) : null;
+  if (!(rec && rec.gateway_key) && !SETTINGS.cloudApiKey) gk = await deriveGatewayKey(token);
+  try { await autoDetectTier(); } catch { /* tier probe is best-effort */ }
+  return { gateway_key: !!(gk || (rec && rec.gateway_key) || SETTINGS.cloudApiKey) };
+}
+
+// Silent re-auth for an OIDC session: every few minutes check whether the
+// token is within 5 minutes of expiry and, if so, rerun the flow with
+// prompt=none. A failure marks the record expired; the UI then says
+// "Sign in again". Never uses the refresh_token grant (the IdP refuses it).
+const OIDC_REAUTH_ALARM = "aither-oidc-reauth";
+/** Create the re-auth alarm only when missing: recreating it on every wake
+ *  would keep pushing it back. Called at module scope and from onStartup. */
+function ensureOidcReauthAlarm() {
+  try {
+    chrome.alarms.get(OIDC_REAUTH_ALARM, (a) => {
+      if (!a) chrome.alarms.create(OIDC_REAUTH_ALARM, { periodInMinutes: 2 });
+    });
+  } catch { /* alarms unavailable in tests */ }
+}
+ensureOidcReauthAlarm();
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== OIDC_REAUTH_ALARM || !self.AitherOIDC) return;
+  self.AitherOIDC.refreshIfDue().then((r) => {
+    if (r && r.ok && r.record && r.record.user_bearer) {
+      self.AitherPortal.setPortalBearer(r.record.user_bearer).catch(() => {});
+    }
+  }).catch(() => {});
+});
 
 async function resolveIdentity() {
   // 0. Signed in on this device (`adk login`): no typing at all.
@@ -3685,6 +3749,7 @@ chrome.runtime.onStartup.addListener(async () => {
   await autoDetectTier();
   await bootstrapCtaAdapters();
   await ensureAlarms();
+  ensureOidcReauthAlarm();
   connectToGenesis();
   checkHealth();
   pullEntitlement().catch(() => {});
@@ -8001,13 +8066,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })();
       return true;
 
+    // ── Sign in with Aitherium (OIDC + PKCE, no awdk needed) ─────────
+    case "auth-oidc-sign-in":
+      (async () => {
+        const r = await self.AitherOIDC.signIn({ interactive: true });
+        if (!r.ok) { sendResponse({ ok: false, error: r.error }); return; }
+        const after = await afterUserSignIn(r.record.user_bearer);
+        sendResponse({ ok: true, source: "oidc", identity: r.record.user, ...after });
+      })().catch((e) => sendResponse({ ok: false, error: e.message }));
+      return true;
+
+    // ── Signed in on this computer (`adk login`): no window at all ────
+    case "auth-local-sign-in":
+      (async () => {
+        const r = await resolveFromLocalAdk();
+        if (r.ok && r.token) {
+          const after = await afterUserSignIn(r.token);
+          sendResponse({ ok: true, source: r.source, cloud: true, identity: r.identity, ...after });
+          return;
+        }
+        sendResponse({ ok: !!r.ok, source: r.source, cloud: false, identity: r.identity || null,
+          note: r.note || r.error || "" });
+      })().catch((e) => sendResponse({ ok: false, error: e.message }));
+      return true;
+
+    case "auth-state":
+      (async () => {
+        const rec = self.AitherAuthStore ? await self.AitherAuthStore.get() : null;
+        sendResponse({ ok: true, signed_in: !!(rec && rec.user_bearer), expired: !!(rec && rec.expired),
+          source: rec ? rec.source : null, user: rec ? rec.user : null,
+          gateway_key: !!(rec && rec.gateway_key) });
+      })().catch((e) => sendResponse({ ok: false, error: e.message }));
+      return true;
+
     // ── Cloud Gateway device flow (RFC 8628) ────────────────────────
     // The gateway only accepts ITS OWN credentials (JWT / aither_sk_live_*).
-    // Portal session tokens 401 — so cloud auth must come from this flow
-    // (or a manually pasted key), never from the portal cookie.
+    // A signed-in user (either rung above) needs no device flow: the gateway
+    // mints the key for the user bearer. Otherwise this is the Advanced path.
     case "cloud-device-connect":
       (async () => {
         try {
+          const bearer = self.AitherAuthStore ? await self.AitherAuthStore.getUserBearer() : null;
+          if (bearer) {
+            const key = await deriveGatewayKey(bearer);
+            if (key) {
+              await autoDetectTier().catch(() => {});
+              sendResponse({ ok: true, status: "complete", durable: true });
+              return;
+            }
+          }
           const gateway = SETTINGS.cloudGatewayUrl || "https://gateway.aitherium.com";
           const r = await fetch(`${gateway}/v1/auth/device/code`, {
             method: "POST",
@@ -8054,6 +8161,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               if (kr.ok) durable = (await kr.json())?.api_key || "";
             } catch { /* fall back to the session JWT */ }
             await saveSettings({ ...SETTINGS, cloudApiKey: durable || data.api_key });
+            if (durable && self.AitherAuthStore) {
+              // Written through the one auth record too, kept apart from the user bearer.
+              const rec = await self.AitherAuthStore.get().catch(() => null);
+              if (rec) await self.AitherAuthStore.set({ ...rec, gateway_key: durable }).catch(() => {});
+            }
             await autoDetectTier();
             sendResponse({ ok: true, status: "complete", email: data.email || "",
                            tier: data.tier || "", durable: !!durable });

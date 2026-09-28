@@ -49,7 +49,8 @@ check('the old three-card chooser is gone', !html.includes('choice-portal') && !
 
 const panel2 = html.slice(html.indexOf('id="panel-2"'), html.indexOf('id="panel-3"'))
 const deviceAt = panel2.indexOf('id="device-signin"')
-check('primary sign-in is the device flow button', deviceAt !== -1 && /btn primary big" id="device-signin"/.test(panel2))
+check('primary sign-in is Sign in with Aitherium (OIDC + PKCE)', /btn primary big" id="oidc-sign-in">Sign in with Aitherium/.test(panel2))
+check('the device flow stays as the secondary button', deviceAt !== -1 && !/primary[^"]*" id="device-signin"/.test(panel2))
 check('email-me-a-link option exists', panel2.includes('id="magic-email"') && panel2.includes('id="magic-send"'))
 check('no email+password form (the route does not exist)',
   !/id="login-password"|id="do-login"/.test(html) && !/portalLogin|portalVerify2fa/.test(js))

@@ -1427,6 +1427,15 @@ $("btn-cloud-connect")?.addEventListener("click", async () => {
     btn.disabled = false;
     return;
   }
+  if (start.status === "complete") {
+    // Already signed in: the gateway minted the key for this account directly.
+    const settings = (await chrome.runtime.sendMessage({ type: "get-settings" }))?.settings || {};
+    $("cloudApiKey").value = settings.cloudApiKey || "";
+    statusEl.innerHTML = '<span style="color:var(--success);">✓ Connected with your Aitherium sign-in — durable API key saved</span>';
+    showToast("Cloud Gateway connected");
+    btn.disabled = false;
+    return;
+  }
 
   statusEl.innerHTML = `<span style="color:var(--text-primary);">Approve in the opened tab — code: <b>${start.user_code}</b></span>`;
 

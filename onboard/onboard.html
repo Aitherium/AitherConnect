@@ -435,9 +435,10 @@
     </div>
   </div>
 
-  <!-- STEP 1: passwordless sign-in. Primary = Identity device flow (the same
-       endpoints `adk login` uses); secondary = an emailed one-tap link (the same
-       device flow with `email`); the password form is the fallback. -->
+  <!-- STEP 1: sign in. First, silently: a local awdk that already ran `adk login`
+       signs this browser in with no window. Primary button = Sign in with
+       Aitherium (OIDC + PKCE in Chrome's own sign-in window). Secondary = the
+       Identity device flow / an emailed link. Advanced = a gateway API key. -->
   <div class="panel hidden" id="panel-2">
     <h2>Sign in with Aitherium</h2>
     <p class="desc">
@@ -447,7 +448,11 @@
 
     <div id="local-identity" class="info-block hidden"></div>
 
-    <button class="btn primary big" id="device-signin">Sign in with Aitherium</button>
+    <button class="btn primary big" id="oidc-sign-in">Sign in with Aitherium</button>
+    <div id="signin-again" class="message warn hidden">Your session ended. Sign in again to keep cloud features on.</div>
+
+    <div class="or-line">or</div>
+    <button class="btn" id="device-signin">Sign in with a code instead</button>
 
     <div id="device-box" class="hidden">
       <p class="desc" style="margin-top:14px;margin-bottom:0;">Confirm this code on the page we opened:</p>
@@ -473,7 +478,12 @@
     <div id="portal-message"></div>
 
     <details class="password" id="password-details">
-      <summary>Advanced</summary>
+      <summary>Advanced: API key</summary>
+      <p class="desc" style="margin-top:8px;">
+        Signing in creates your gateway key automatically. To use a key you already
+        have, or to connect with the gateway's own code flow, open
+        <a class="small-link" id="open-gateway-settings" href="#">Settings &rarr; Cloud Gateway</a>.
+      </p>
       <div class="field">
         <label>Platform URL</label>
         <input type="text" id="portal-url" placeholder="https://api.aitherium.com" />

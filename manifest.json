@@ -11,6 +11,7 @@
   "permissions": [
     "sidePanel",
     "storage",
+    "identity",
     "unlimitedStorage",
     "activeTab",
     "tabs",
@@ -25,6 +26,8 @@
     "processes"
   ],
   "host_permissions": [
+    "https://idp.aitherium.com/*",
+    "https://api.aitherium.com/*",
     "http://*/*",
     "https://*/*"
   ],
