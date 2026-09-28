@@ -130,6 +130,16 @@ const DEFAULT_SETTINGS = {
   // default host.
   syncEnabled: false,
   osOverlayEnabled: true,
+  // SUMMONED, NOT AMBIENT (owner report 2026-09-27: "always starts on web pages
+  // opened and it messes with other stuff in the web page"). osOverlayEnabled
+  // only permits the overlay; it no longer paints itself onto every page load.
+  // Every auto-inject iframes the full OS AND re-pads html/body plus up to 24
+  // scroll containers of the host page — layout mutation nobody asked for on a
+  // page they opened to read. Alt+O / the popup summon it per tab. A separate
+  // key (not a new default for osOverlayEnabled) because the owner's synced
+  // settings already store osOverlayEnabled:true, so flipping that default
+  // would change nothing for the person who reported it.
+  osOverlayAutoStart: false,
   // The command bar: a full-width Aither bar injected into every page. It is
   // ALSO the only in-page driver for the X/LinkedIn social automation (see
   // content/aither-command-bar.js — PLATFORM === "x" starts the post/engage
@@ -4368,6 +4378,21 @@ function _injectableUrl(url) {
   return true;
 }
 
+/** Summon or dismiss the overlay in one tab. A bridge already on the page
+ *  answers "overlay-dismiss" and removes itself (restoring the page's padding);
+ *  no answer means none is there, so inject one. Same URL guard as auto-inject:
+ *  never on the OS itself, never on a page that cannot host a script. */
+async function toggleOverlayInTab(tabId, url) {
+  try {
+    const res = await chrome.tabs.sendMessage(tabId, { action: "overlay-dismiss" });
+    if (res && res.ok) return { ok: true, shown: false };
+  } catch { /* no bridge listening on this tab */ }
+  if (!SETTINGS.osOverlayEnabled) return { ok: false, error: "overlay disabled in options" };
+  if (url && !_injectableUrl(url)) return { ok: false, error: "this page cannot host the overlay" };
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["content/aither-overlay-bridge.js"] });
+  return { ok: true, shown: true };
+}
+
 /** Inject whatever the current settings call for into one tab. Both scripts
  *  guard against double-injection themselves, so re-firing is harmless. */
 function injectInto(tabId, url) {
@@ -4398,7 +4423,7 @@ function injectInto(tabId, url) {
   // the command bar, whose xPageDriverAt lease keeps renewing from its closures
   // even after the DOM node is gone, so social automation stops with nothing
   // logged and every surface still reporting enabled.
-  if (SETTINGS.osOverlayEnabled && !isSocial) _xInjectPanel(tabId, "content/aither-overlay-bridge.js");
+  if (SETTINGS.osOverlayAutoStart && SETTINGS.osOverlayEnabled && !isSocial) _xInjectPanel(tabId, "content/aither-overlay-bridge.js");
   if (SETTINGS.commandBarEnabled && isSocial) _xInjectPanel(tabId, "content/aither-command-bar.js");
 }
 
@@ -4410,7 +4435,7 @@ function injectInto(tabId, url) {
  *  the in-page driver for post/engage, so an un-swept tab is an automation
  *  that silently never runs. */
 async function sweepInjectables() {
-  if (!SETTINGS.commandBarEnabled && !SETTINGS.osOverlayEnabled) return;
+  if (!SETTINGS.commandBarEnabled && !(SETTINGS.osOverlayEnabled && SETTINGS.osOverlayAutoStart)) return;
   try {
     const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
     for (const t of tabs) {
@@ -4671,6 +4696,13 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
         await chrome.sidePanel.open({ tabId: tab.id });
       }
     }
+  }
+  // Alt+O. The manifest has always named this command "toggle-os-overlay", but
+  // the only handler here matched "toggle-overlay" — so the advertised shortcut
+  // did nothing, and auto-inject on every page was the only way the overlay ever
+  // appeared. Now that the overlay is summoned, this IS the front door.
+  if (command === "toggle-os-overlay" && tab?.id) {
+    await toggleOverlayInTab(tab.id, tab.url);
   }
   if (command === "toggle-overlay" && tab?.id) {
     // Browser-level shortcut (works even when the OS iframe has focus, unlike the
@@ -5268,6 +5300,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             tid = active && active.id;
           }
           if (tid == null) { sendResponse({ ok: false, error: "no active tab" }); return; }
+          // "toggle-overlay" really toggles (the popup button is a summon AND a
+          // dismiss); "inject-overlay" only ever shows.
+          if (message.type === "toggle-overlay") {
+            const t = await chrome.tabs.get(tid).catch(() => null);
+            sendResponse(await toggleOverlayInTab(tid, t && t.url));
+            return;
+          }
           await chrome.scripting.executeScript({ target: { tabId: tid }, files: ["content/aither-overlay-bridge.js"] });
           sendResponse({ ok: true });
         } catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }

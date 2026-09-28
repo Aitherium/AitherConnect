@@ -280,6 +280,25 @@
     color: var(--text-secondary);
     margin-bottom: 14px;
   }
+  .user-code {
+    font-family: var(--font-mono);
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: 4px;
+    color: var(--accent);
+    text-align: center;
+    padding: 14px;
+    margin: 10px 0;
+    border: 1px dashed var(--border-bright);
+    border-radius: var(--radius);
+  }
+  .btn.big { width: 100%; padding: 14px; font-size: 15px; }
+  .or-line { text-align: center; color: var(--text-muted); font-size: 12px; margin: 16px 0; }
+  .inline-row { display: flex; gap: 8px; align-items: stretch; }
+  .inline-row input { flex: 1; }
+  details.password { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
+  details.password summary { cursor: pointer; font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
@@ -287,41 +306,56 @@
   <p class="subtitle">Wire your browser into AitherOS in a few simple steps.</p>
 
   <div class="steps" id="steps-container">
-    <div class="step-pill active" id="pill-0">0 · Choose</div>
-    <div class="step-pill" id="pill-1">1 · Set up</div>
-    <div class="step-pill" id="pill-2">2 · Verify</div>
+    <div class="step-pill active" id="pill-0">0 · Install</div>
+    <div class="step-pill" id="pill-1">1 · Sign in</div>
+    <div class="step-pill" id="pill-2">2 · Set up</div>
     <div class="step-pill" id="pill-3">3 · Ready</div>
   </div>
 
-  <!-- STEP 0: choice -->
+  <!-- STEP 0: get AitherOS on this computer (awdk + awsh). The extension is the
+       browser half; the local node is the rest. BYOK stays one click away. -->
   <div class="panel" id="panel-0">
-    <h2>How do you want to get started?</h2>
-    <p class="desc">Choose the option that fits your setup best. You can change it later.</p>
+    <h2>Get AitherOS on this computer</h2>
+    <p class="desc">
+      Awconnect is the browser half of AitherOS. The other half &mdash; <strong>awdk</strong>
+      (your local agent) and <strong>awsh</strong> (the <code>aither</code> shell) &mdash;
+      runs on this computer. We check for it automatically.
+    </p>
 
-    <div class="choice-grid">
-      <div class="choice-card primary" id="choice-byok">
-        <div class="title">✨ Use an AI Provider (BYOK)</div>
-        <div class="body">
-          Bring your own API key — Anthropic, OpenAI, OpenRouter, Gemini, or local Ollama.
-          No account needed.
-        </div>
-      </div>
-      <div class="choice-card" id="choice-fleet">
-        <div class="title">🔌 Connect my AitherOS fleet</div>
-        <div class="body">
-          Local Genesis/Node detected automatically.
-        </div>
-      </div>
-      <div class="choice-card" id="choice-portal">
-        <div class="title">🏢 Sign in to Aitherium Portal</div>
-        <div class="body">
-          Cloud-based AitherOS with centralized identity and workspaces.
-        </div>
-      </div>
+    <div class="install-row">
+      <div class="who">awdk agent daemon <span class="hint">adk &middot; port 9001</span></div>
+      <span class="status miss" id="status-adk">checking…</span>
+    </div>
+    <div class="install-row">
+      <div class="who">awsh harness daemon <span class="hint">aither shell &middot; port 8362</span></div>
+      <span class="status miss" id="status-awsh">checking…</span>
+    </div>
+    <div class="install-row">
+      <div class="who">MCP gateway <span class="hint">full AitherOS fleet &middot; port 8182 (optional)</span></div>
+      <span class="status miss" id="status-awnode">checking…</span>
     </div>
 
+    <div id="local-found" class="message success hidden">AitherOS is running on this computer.</div>
+
+    <div id="local-install" class="hidden">
+      <p class="desc" style="margin-top:14px;">
+        Not installed yet? One line installs awdk + awsh
+        (<span id="install-os">this computer</span>) &mdash; paste it into a terminal:
+      </p>
+      <div class="code-block" id="install-cmd"></div>
+      <div class="inline-row" style="margin-top:8px;">
+        <button class="btn" id="copy-install">Copy command</button>
+        <span id="copy-install-msg" style="align-self:center;font-size:12px;color:var(--text-muted);"></span>
+      </div>
+      <p class="desc" style="margin-top:10px;">The installer runs a short setup wizard. When it finishes, click <strong>Check again</strong>.</p>
+    </div>
+
+    <div id="local-message"></div>
+
     <div class="actions">
-      <button class="btn primary" id="choice-confirm" disabled>Continue</button>
+      <button class="small-link" id="choice-byok">Just use an API key instead</button>
+      <button class="btn" id="recheck-local0" style="margin-left:auto;">Check again</button>
+      <button class="btn primary" id="choice-confirm">Continue</button>
     </div>
   </div>
 
@@ -382,16 +416,13 @@
     </div>
   </div>
 
-  <!-- STEP 1: FLEET mode (existing local detection) -->
+  <!-- LOCAL ONLY: no account. Reached from the sign-in step's "skip". -->
   <div class="panel hidden" id="panel-1">
-    <h2>Configure your local AitherOS fleet</h2>
-    <p class="desc">Awconnect will probe for Genesis and awnode running locally.</p>
+    <h2>Use AitherOS on this computer only</h2>
+    <p class="desc">No account, nothing sent to Aitherium. Awconnect talks to your local awdk / awsh.</p>
 
     <div class="install-row">
-      <div class="who">
-        awnode
-        <span class="hint">MCP server + ADK runtime (port 8090)</span>
-      </div>
+      <div class="who">Local AitherOS <span class="hint">awdk / awsh / MCP gateway</span></div>
       <span class="status miss" id="status-node-fleet">checking…</span>
     </div>
 
@@ -399,43 +430,75 @@
 
     <div class="actions">
       <button class="btn" id="back-from-fleet">Back</button>
-      <button class="btn" id="recheck-fleet" style="margin-right:auto;">Re-check local</button>
+      <button class="btn" id="recheck-fleet" style="margin-right:auto;">Check again</button>
       <button class="btn primary" id="finish-fleet">Finish setup</button>
     </div>
   </div>
 
-  <!-- STEP 1: PORTAL mode (portal sign-in) -->
+  <!-- STEP 1: passwordless sign-in. Primary = Identity device flow (the same
+       endpoints `adk login` uses); secondary = an emailed one-tap link (the same
+       device flow with `email`); the password form is the fallback. -->
   <div class="panel hidden" id="panel-2">
-    <h2>Sign in to Aitherium Portal</h2>
+    <h2>Sign in with Aitherium</h2>
     <p class="desc">
-      Your portal account is the identity used to scope agents, workspaces, and
-      federated fleet membership. Don't have one yet?
-      <a class="small-link" id="open-signup" href="#">Create one</a>.
+      No password needed. Your Aitherium account scopes agents, workspaces and fleet
+      membership. No account yet? The sign-in page lets you create one.
     </p>
 
-    <div class="field">
-      <label>Portal URL</label>
-      <input type="text" id="portal-url" placeholder="https://portal.aitherium.com" />
-    </div>
-    <div class="field">
-      <label>Email</label>
-      <input type="email" id="login-email" placeholder="you@example.com" autocomplete="username" />
-    </div>
-    <div class="field">
-      <label>Password</label>
-      <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" />
+    <div id="local-identity" class="info-block hidden"></div>
+
+    <button class="btn primary big" id="device-signin">Sign in with Aitherium</button>
+
+    <div id="device-box" class="hidden">
+      <p class="desc" style="margin-top:14px;margin-bottom:0;">Confirm this code on the page we opened:</p>
+      <div class="user-code" id="device-code">&mdash;</div>
+      <p class="desc" id="device-status">Waiting for you to approve…</p>
+      <div class="inline-row">
+        <button class="btn" id="device-reopen">Open the page again</button>
+        <button class="btn" id="device-cancel">Cancel</button>
+      </div>
     </div>
 
-    <div class="field hidden" id="twofa-field">
-      <label>Two-factor code</label>
-      <input type="text" id="login-2fa" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" />
+    <div id="magic-block">
+      <div class="or-line">or</div>
+      <div class="field">
+        <label>Email me a sign-in link</label>
+        <div class="inline-row">
+          <input type="email" id="magic-email" placeholder="you@example.com" autocomplete="email" />
+          <button class="btn" id="magic-send">Send link</button>
+        </div>
+      </div>
     </div>
 
     <div id="portal-message"></div>
 
+    <details class="password" id="password-details">
+      <summary>Use a password instead</summary>
+      <div class="field">
+        <label>Portal URL</label>
+        <input type="text" id="portal-url" placeholder="https://portal.aitherium.com" />
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="login-email" placeholder="you@example.com" autocomplete="username" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+      <div class="field hidden" id="twofa-field">
+        <label>Two-factor code</label>
+        <input type="text" id="login-2fa" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" />
+      </div>
+      <div class="actions" style="margin-top:0;">
+        <a class="small-link" id="open-signup" href="#">Create an account</a>
+        <button class="btn" id="do-login" style="margin-left:auto;">Sign in with password</button>
+      </div>
+    </details>
+
     <div class="actions">
       <button class="btn" id="back-from-portal">Back</button>
-      <button class="btn primary" id="do-login">Sign in</button>
+      <button class="small-link hidden" id="skip-signin" style="margin-left:auto;">Skip &mdash; use this computer only</button>
     </div>
   </div>
 
@@ -492,24 +555,21 @@
     <div id="provision-local" class="hidden">
       <div class="install-row" id="row-shell">
         <div class="who">
-          AitherShell
-          <span class="hint">Local CLI for managing the stack</span>
+          awsh
+          <span class="hint">the <code>aither</code> shell + harness daemon (port 8362)</span>
         </div>
-        <span class="status miss" id="status-shell">install via pip</span>
+        <span class="status miss" id="status-shell">checking…</span>
       </div>
-      <!-- `pip install aithershell` was never published (PyPI 404) — npm is the real channel. -->
-      <div class="code-block">npm install -g @aitherium/shell-cli</div>
 
       <div class="install-row" id="row-node">
         <div class="who">
-          awnode
-          <span class="hint">MCP server + ADK runtime (port 8090)</span>
+          awdk
+          <span class="hint">your local agent daemon (port 9001)</span>
         </div>
-        <span class="status miss" id="status-node">not detected</span>
+        <span class="status miss" id="status-node">checking…</span>
       </div>
-      <!-- `pip install awnode` was never published (PyPI trusted publishing not
-           configured) — the portal's authenticated binary download is the real channel. -->
-      <div class="code-block">Download from https://portal.aitherium.com/download → run: awnode start --port 8090</div>
+      <!-- One line installs both (awdk README; install.ps1/.sh also npm-install @aitherium/awsh). -->
+      <div class="code-block" id="provision-install-cmd"></div>
 
       <button class="small-link" id="recheck-local" style="margin-top:6px;">Re-check local installation</button>
     </div>
@@ -524,6 +584,8 @@
 
   <script src="../shared/providers.js"></script>
   <script src="../shared/portal-api.js"></script>
+  <script src="../shared/local-endpoints.js"></script>
+  <script src="../shared/onboard-flow.js"></script>
   <script src="onboard.js"></script>
 </body>
 </html>

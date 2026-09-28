@@ -241,12 +241,58 @@
   minBtn.style.cssText = `position:fixed;left:12px;bottom:10px;z-index:${Z + 1};display:none;
     width:26px;height:26px;border-radius:7px;background:rgba(14,16,20,.9);color:#8a99a8;
     border:1px solid #333a44;cursor:pointer;font-size:13px;line-height:1;`;
+  // × closes the overlay for THIS tab (Alt+O brings it back). Minimize alone
+  // still left a control on the page; sometimes the right answer is "gone".
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "×";
+  closeBtn.title = "Close the Aither OS overlay on this tab (Alt+O to reopen)";
+  closeBtn.style.cssText = `position:fixed;left:42px;bottom:10px;z-index:${Z + 1};display:none;
+    width:26px;height:26px;border-radius:7px;background:rgba(14,16,20,.9);color:#8a99a8;
+    border:1px solid #333a44;cursor:pointer;font-size:15px;line-height:1;`;
+  /* THE MINIMIZED HANDLE IS AN EDGE TAB, NOT A BUTTON ON THE PAGE.
+   * It was a 26px ⚡ square parked at bottom-left — on top of whatever the page
+   * keeps there (cookie banners, chat launchers, pagination, a sidebar's last
+   * item). Now it is a thin tab flush against the left viewport edge, dimmed
+   * until hovered, and draggable up/down so the owner can park it where the page
+   * has nothing. Its position and the minimized state persist (chrome.storage),
+   * so a minimized overlay stays minimized on the next page instead of coming
+   * back full-size on every navigation. */
   const restoreBtn = document.createElement("button");
   restoreBtn.textContent = "⚡";
-  restoreBtn.title = "Show the Aither OS toolbar";
-  restoreBtn.style.cssText = `position:fixed;left:12px;bottom:10px;z-index:${Z + 1};display:none;
-    width:26px;height:26px;border-radius:7px;background:rgba(34,211,238,.15);color:#22d3ee;
-    border:1px solid rgba(34,211,238,.45);cursor:pointer;font-size:14px;line-height:1;`;
+  restoreBtn.title = "Show the Aither OS toolbar (drag to move)";
+  restoreBtn.style.cssText = `position:fixed;left:0;top:60%;z-index:${Z + 1};display:none;
+    width:14px;height:44px;padding:0;border-radius:0 8px 8px 0;background:rgba(14,16,20,.85);color:#22d3ee;
+    border:1px solid rgba(34,211,238,.45);border-left:0;cursor:pointer;font-size:10px;line-height:1;
+    opacity:.45;transition:opacity .15s ease,width .15s ease;touch-action:none;`;
+  restoreBtn.addEventListener("mouseenter", () => { restoreBtn.style.opacity = "1"; restoreBtn.style.width = "22px"; });
+  restoreBtn.addEventListener("mouseleave", () => { restoreBtn.style.opacity = ".45"; restoreBtn.style.width = "14px"; });
+
+  const UI_KEY = "aither-overlay-ui";
+  let handleTopPct = 60;
+  function saveUi() {
+    try { chrome.storage.local.set({ [UI_KEY]: { minimized, handleTopPct } }); } catch { /* not in extension context */ }
+  }
+  function placeHandle() { restoreBtn.style.top = `calc(${handleTopPct}% - 22px)`; }
+
+  // Drag vs click: a press that moves more than 4px is a drag and does NOT restore.
+  let drag = null;
+  restoreBtn.addEventListener("pointerdown", (e) => {
+    drag = { y0: e.clientY, moved: false };
+    try { restoreBtn.setPointerCapture(e.pointerId); } catch { /* old engine */ }
+  });
+  restoreBtn.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    if (Math.abs(e.clientY - drag.y0) > 4) drag.moved = true;
+    if (!drag.moved) return;
+    handleTopPct = Math.min(95, Math.max(5, (e.clientY / Math.max(1, window.innerHeight)) * 100));
+    placeHandle();
+  });
+  restoreBtn.addEventListener("pointerup", () => {
+    const moved = drag && drag.moved;
+    drag = null;
+    if (moved) { saveUi(); return; }
+    minimized = false; saveUi(); renderMode();
+  });
 
   // ── Pointer-events model (v2 = clip to OS chrome) ──────────────────────────
   // The OS publishes `os-regions` — the live rects of its dock and open windows
@@ -311,11 +357,12 @@
     const showDock = ready && !minimized;
     const left = (showDock && edge === "left" ? t : 0) + 12;
     const bottom = (showDock && edge === "bottom" ? t : 0) + 10;
-    for (const el of [minBtn, restoreBtn]) {
-      el.style.left = left + "px";
-      el.style.right = "auto";
-      el.style.bottom = bottom + "px";
-    }
+    // restoreBtn is the edge tab; placeHandle() owns its position.
+    minBtn.style.left = left + "px";
+    minBtn.style.bottom = bottom + "px";
+    closeBtn.style.left = (left + 30) + "px";
+    closeBtn.style.bottom = bottom + "px";
+    placeHandle();
     hint.style.left = left + "px";
     hint.style.bottom = (bottom + 36) + "px";
   }
@@ -399,20 +446,55 @@
     else { clearClip(); frame.style.pointerEvents = "none"; mode = "waiting"; text = "⚡ Aither OS overlay — Alt+` to interact"; }
     if (mode !== lastMode) { lastMode = mode; showHint(text); }
     minBtn.style.display = (ready && !minimized) ? "block" : "none";
+    closeBtn.style.display = (ready && !minimized) ? "block" : "none";
     restoreBtn.style.display = (ready && minimized) ? "block" : "none";
     placeControls();
     applyPagePad();
   }
 
-  minBtn.addEventListener("click", () => { minimized = true; renderMode(); });
-  restoreBtn.addEventListener("click", () => { minimized = false; renderMode(); });
+  minBtn.addEventListener("click", () => { minimized = true; saveUi(); renderMode(); });
+  closeBtn.addEventListener("click", () => teardown());
+
+  /* Leave the page exactly as we found it: every element we added removed, every
+   * padding we wrote cleared (applyPagePad with ready=false writes ""), timers
+   * stopped. The latch is released so Alt+O can summon a fresh bridge; `torn`
+   * silences THIS instance's listeners, which cannot be unregistered from here
+   * and would otherwise answer the next bridge's messages. */
+  let torn = false;
+  let contextTimer = null;
+  function teardown() {
+    if (torn) return;
+    torn = true;
+    ready = false;
+    try { applyPagePad(); } catch { /* page gone */ }
+    clearTimeout(readyTimeout); clearTimeout(hintTimer); clearInterval(contextTimer);
+    for (const el of [host, hint, minBtn, closeBtn, restoreBtn]) el.remove();
+    window.__aitherOverlay = false;
+  }
+  try {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (torn || !msg || msg.action !== "overlay-dismiss") return;
+      teardown();
+      sendResponse({ ok: true });
+      return false;
+    });
+  } catch { /* not in extension context */ }
+  try {
+    chrome.storage.local.get(UI_KEY, (got) => {
+      const ui = got && got[UI_KEY];
+      if (!ui || torn) return;
+      if (typeof ui.handleTopPct === "number") handleTopPct = ui.handleTopPct;
+      minimized = !!ui.minimized;
+      renderMode();
+    });
+  } catch { /* not in extension context */ }
 
   window.addEventListener("keydown", (e) => {
     // Alt+` (backtick) toggles interact/pass-through. NOT Alt+Space: on Windows
     // that is the window-menu system shortcut and never reaches the page.
     if (e.altKey && (e.code === "Backquote" || e.key === "`")) { e.preventDefault(); interactive = !interactive; renderMode(); }
     // Alt+Shift+H hides the overlay entirely (Escape from any weirdness).
-    if (e.altKey && e.shiftKey && (e.key === "H" || e.key === "h")) { host.remove(); hint.remove(); minBtn.remove(); restoreBtn.remove(); window.__aitherOverlay = false; }
+    if (e.altKey && e.shiftKey && (e.key === "H" || e.key === "h")) teardown();
   }, true);
 
   // ── The bridge: OS (iframe) → this page's DOM, and back ──────────────────────
@@ -599,7 +681,7 @@
       clearTimeout(selTimer);
       selTimer = setTimeout(() => publishPageContext(false), 400);   // debounce a drag-select
     }, { passive: true });
-    setInterval(() => {
+    contextTimer = setInterval(() => {
       if (location.href !== lastUrl) { lastUrl = location.href; publishPageContext(true); publishSiteAdapter(false); return; }
       publishPageContext(false);
     }, 3000);
@@ -611,6 +693,7 @@
     (document.body || document.documentElement).appendChild(host);
     document.documentElement.appendChild(hint);
     document.documentElement.appendChild(minBtn);
+    document.documentElement.appendChild(closeBtn);
     document.documentElement.appendChild(restoreBtn);
     // Brief pre-ready hint so the user knows the OS is coming (auto-dismisses).
     showHint("⚡ Aither OS overlay — Alt+` to interact", 8000);

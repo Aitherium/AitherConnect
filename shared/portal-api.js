@@ -76,7 +76,7 @@ async function portalLogin({ email, password }) {
     body: JSON.stringify({ email, password }),
   });
   if (!r.ok) {
-    return { ok: false, error: (r.payload && r.payload.error) || `login failed (${r.status})` };
+    return { ok: false, status: r.status, error: (r.payload && r.payload.error) || `login failed (${r.status})` };
   }
   if (r.payload?.requires_2fa) {
     return { ok: false, requires_2fa: true, temp_token: r.payload.temp_token };
@@ -126,7 +126,7 @@ async function portalQuickOnboard({ agent_name, description }) {
     method: "POST",
   });
   if (!r.ok) {
-    return { ok: false, error: (r.payload && r.payload.error) || `onboard failed (${r.status})` };
+    return { ok: false, status: r.status, error: (r.payload && r.payload.error) || `onboard failed (${r.status})` };
   }
   const bundle = r.payload || {};
   await setPortalRecord({

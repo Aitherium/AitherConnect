@@ -241,6 +241,7 @@ async function populateForm(settings) {
   // shows the shipped default rather than an unchecked box that lies about it.
   $("commandBarEnabled").checked = mergedSettings.commandBarEnabled !== false;
   $("osOverlayEnabled").checked = !!mergedSettings.osOverlayEnabled;
+  $("osOverlayAutoStart").checked = !!mergedSettings.osOverlayAutoStart;
   $("syncEnabled").checked = !!mergedSettings.syncEnabled;
   // Tier settings
   $("preferredTier").value = mergedSettings.preferredTier || "auto";
@@ -312,6 +313,7 @@ function readForm() {
     ragEnabled: $("ragEnabled").checked,
     commandBarEnabled: $("commandBarEnabled").checked,
     osOverlayEnabled: $("osOverlayEnabled").checked,
+    osOverlayAutoStart: $("osOverlayAutoStart").checked,
     syncEnabled: $("syncEnabled").checked,
     // Tier settings
     preferredTier: $("preferredTier").value || "auto",

@@ -1,14 +1,28 @@
 /**
- * Awconnect onboarding wizard (consumer-first)
- * Step 0: choice → BYOK|Fleet|Portal paths
- * BYOK: provider → key entry → verify → finish
- * Fleet: local detect → finish
- * Portal: sign-in → mode → provision → finish
+ * Awconnect onboarding wizard.
+ *
+ * Step 0  Get AitherOS on this computer: probe the adk daemon (:9001), the awsh
+ *         harness daemon (:8362) and the MCP gateway (:8182); when none answers,
+ *         show the one-line awdk+awsh installer with "Check again".
+ *         "Just use an API key" (BYOK) stays one click away.
+ * Step 1  Sign in, passwordless: "Sign in with Aitherium" runs Identity's device
+ *         flow (the endpoints `adk login` uses); "Email me a sign-in link" is the
+ *         same flow with the account's address, so Identity mails a one-tap
+ *         approve link. The password form sits behind "Use a password instead".
+ *         With AitherOS local, "Skip - use this computer only" needs no account.
+ * Step 2  Mode + provision (unchanged).
+ *
+ * A portal/fleet that does not answer (network error, 5xx) is reported as
+ * "unreachable (maintenance or offline)", never as a generic failure -- measured
+ * 2026-09-27: portal.aitherium.com answered 503 and the old form said
+ * "Network error".
  */
 
 const $ = (id) => document.getElementById(id);
 const P = self.AitherPortal;
 const Prov = self.AitherProviders;
+const Flow = self.AitherOnboardFlow;
+const LocalEP = self.AitherLocalEndpoints;
 
 let state = {
   step: 0,
@@ -19,6 +33,9 @@ let state = {
   temp2faToken: null,
   bundle: null,
   user: null,
+  local: null, // last probeLocal() result
+  device: null, // {device_code, user_code, verification_uri_complete, interval, expires_in}
+  deviceCancelled: false,
 };
 
 // === NAVIGATION & DISPLAY ===
@@ -55,49 +72,73 @@ function escapeHtml(s) {
   })[c]);
 }
 
-// === STEP 0: CHOICE ===
+// === STEP 0: GET AITHEROS ON THIS COMPUTER ===
+
+async function localEndpointMap() {
+  try {
+    if (LocalEP) return (await LocalEP.localEndpoints({ force: true })).endpoints;
+  } catch (_) { /* fall back to the defaults inside probeLocal */ }
+  return {};
+}
+
+function paintProbe(id, r) {
+  const el = $(id);
+  if (!el) return;
+  if (r && r.ok) {
+    el.className = "status ok";
+    el.textContent = "running";
+  } else if (r && r.status) {
+    el.className = "status err";
+    el.textContent = `HTTP ${r.status}`;
+  } else {
+    el.className = "status miss";
+    el.textContent = "not detected";
+  }
+}
+
+async function detectLocal() {
+  ["status-adk", "status-awsh", "status-awnode"].forEach((id) => {
+    const el = $(id);
+    if (el) { el.className = "status miss"; el.textContent = "checking…"; }
+  });
+  const local = await Flow.probeLocal({ fetch: (u, o) => fetch(u, o), endpoints: await localEndpointMap() });
+  state.local = local;
+  paintProbe("status-adk", local.adk);
+  paintProbe("status-awsh", local.awsh);
+  paintProbe("status-awnode", local.awnode);
+  $("local-found").classList.toggle("hidden", !local.found);
+  $("local-install").classList.toggle("hidden", local.found);
+  $("choice-confirm").textContent = local.found ? "Continue" : "Continue without installing";
+  return local;
+}
 
 function initStep0() {
   showPanel("panel-0");
   showPill(0);
-  // Portal sign-in is the DEFAULT path for non-technical customers (store pilots):
-  // install -> sign in to portal.aitherium.com -> land in your feature-locked apps.
-  // BYOK / Fleet remain one click away for power users.
-  state.choice = "portal";
-  const byokCard = $("choice-byok");
-  const fleetCard = $("choice-fleet");
-  const portalCard = $("choice-portal");
-  if (byokCard) byokCard.classList.remove("selected");
-  if (fleetCard) fleetCard.classList.remove("selected");
-  if (portalCard) portalCard.classList.add("selected");
-  $("choice-confirm").disabled = false;
+  const platform = Flow.platformOf();
+  $("install-cmd").textContent = Flow.installCommand(platform);
+  $("install-os").textContent = platform === "windows" ? "Windows PowerShell" : platform === "mac" ? "macOS Terminal" : "Linux shell";
+  msg("local-message", "");
+  detectLocal();
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  const byokCard = $("choice-byok");
-  const fleetCard = $("choice-fleet");
-  const portalCard = $("choice-portal");
-
-  const selectChoice = (choice) => {
-    state.choice = choice;
-    byokCard.classList.toggle("selected", choice === "byok");
-    fleetCard.classList.toggle("selected", choice === "fleet");
-    portalCard.classList.toggle("selected", choice === "portal");
-    $("choice-confirm").disabled = !choice;
-  };
-
-  byokCard.addEventListener("click", () => selectChoice("byok"));
-  fleetCard.addEventListener("click", () => selectChoice("fleet"));
-  portalCard.addEventListener("click", () => selectChoice("portal"));
-
-  $("choice-confirm").addEventListener("click", async () => {
-    if (state.choice === "byok") {
-      initBYOKProvider();
-    } else if (state.choice === "fleet") {
-      initFleet();
-    } else if (state.choice === "portal") {
-      initPortal();
+  $("choice-byok").addEventListener("click", () => {
+    state.choice = "byok";
+    initBYOKProvider();
+  });
+  $("recheck-local0").addEventListener("click", detectLocal);
+  $("copy-install").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText($("install-cmd").textContent);
+      $("copy-install-msg").textContent = "Copied. Paste it into a terminal.";
+    } catch (_) {
+      $("copy-install-msg").textContent = "Select the command above and copy it.";
     }
+  });
+  $("choice-confirm").addEventListener("click", () => {
+    state.choice = "portal";
+    initPortal();
   });
 
   initStep0();
@@ -306,55 +347,63 @@ $("byok-open-sidepanel").addEventListener("click", () => {
   chrome.sidePanel.open({ window: chrome.windows.WINDOW_ID_CURRENT });
 });
 
-// === FLEET PATH ===
+// === LOCAL-ONLY PATH (no account) ===
 
 async function initFleet() {
   showPanel("panel-1");
-  showPill(1);
+  showPill(2);
   msg("fleet-message", "");
   await recheckFleet();
 }
 
-$("back-from-fleet").addEventListener("click", initStep0);
+$("back-from-fleet").addEventListener("click", () => initPortal());
 $("recheck-fleet").addEventListener("click", recheckFleet);
 
 async function recheckFleet() {
   const statusEl = $("status-node-fleet");
   statusEl.className = "status miss";
   statusEl.textContent = "checking…";
-
-  try {
-    const r = await fetch("http://127.0.0.1:8090/health", { method: "GET", mode: "cors" });
-    if (r.ok) {
-      statusEl.className = "status ok";
-      statusEl.textContent = "running";
-    } else {
-      statusEl.className = "status err";
-      statusEl.textContent = `HTTP ${r.status}`;
-    }
-  } catch (_) {
+  const local = await detectLocal();
+  if (local.found) {
+    statusEl.className = "status ok";
+    statusEl.textContent = ["adk", "awsh", "awnode"].filter((k) => local[k] && local[k].ok).join(" + ");
+  } else {
     statusEl.className = "status miss";
     statusEl.textContent = "not detected";
+    msg("fleet-message", "Nothing is running on this computer yet. Go back and install awdk + awsh first.", "warn");
   }
 }
 
+// "Finish setup" on the local-only panel: no account, the local stack serves.
 $("finish-fleet").addEventListener("click", async () => {
-  const settings = await getCurrentSettings();
-  settings.preferredTier = "genesis";
-  await saveSettings(settings);
+  $("finish-fleet").disabled = true;
+  try {
+    const settings = await getCurrentSettings();
+    settings.preferredTier = "genesis";
+    await saveSettings(settings);
 
-  await chrome.storage.local.set({
-    aither_onboarded_at: Date.now(),
-    aither_mode: "fleet",
-  });
+    await chrome.storage.local.set({
+      aither_onboarded_at: Date.now(),
+      aither_mode: "fleet",
+    });
 
-  msg("fleet-message", "Setup complete. Open the side panel to start.", "success");
-  setTimeout(() => {
-    chrome.sidePanel.open({ window: chrome.windows.WINDOW_ID_CURRENT });
-  }, 500);
+    msg("fleet-message", "Setup complete. Open the side panel to start.", "success");
+    showPill(3);
+    setTimeout(() => {
+      chrome.sidePanel.open({ window: chrome.windows.WINDOW_ID_CURRENT });
+    }, 500);
+  } finally {
+    $("finish-fleet").disabled = false;
+  }
 });
 
-// === PORTAL PATH ===
+// === SIGN-IN (PASSWORDLESS FIRST) ===
+
+function identityUrl() {
+  // The portal URL field is only for the password fallback; the device flow
+  // lives on Identity (idp.aitherium.com for the hosted topology).
+  return Flow.identityUrlFor($("portal-url").value.trim() || P.PORTAL_DEFAULT_URL);
+}
 
 async function initPortal() {
   showPanel("panel-2");
@@ -365,17 +414,128 @@ async function initPortal() {
   $("login-email").value = "";
   $("login-password").value = "";
   $("twofa-field").classList.add("hidden");
+  $("device-box").classList.add("hidden");
+  $("device-signin").disabled = false;
   msg("portal-message", "");
   state.temp2faToken = null;
+  $("skip-signin").classList.toggle("hidden", !(state.local && state.local.found));
+
+  // The local node's identity, when its daemon will say (a name, never a token).
+  const idBox = $("local-identity");
+  idBox.classList.add("hidden");
+  if (state.local && state.local.adk && state.local.adk.ok) {
+    const who = await Flow.localIdentity({ fetch: (u, o) => fetch(u, o), adkUrl: state.local.adk.url });
+    if (who) {
+      idBox.textContent = `This computer is signed in as ${who.display_name || who.username}. Approve the same account below.`;
+      idBox.classList.remove("hidden");
+    }
+  }
+
+  // Hide the email option when Identity says it cannot send mail; say so plainly
+  // when Identity does not answer at all.
+  const methods = await Flow.authMethods({ fetch: (u, o) => fetch(u, o), identityUrl: identityUrl() });
+  $("magic-block").classList.toggle("hidden", methods.magic_link === false);
+  if (!methods.reachable) msg("portal-message", Flow.UNREACHABLE_MESSAGE, "warn");
 }
 
-$("back-from-portal").addEventListener("click", initStep0);
+$("back-from-portal").addEventListener("click", () => {
+  state.deviceCancelled = true;
+  initStep0();
+});
+
+$("skip-signin").addEventListener("click", () => {
+  state.deviceCancelled = true;
+  state.choice = "fleet";
+  initFleet();
+});
 
 $("open-signup").addEventListener("click", (e) => {
   e.preventDefault();
   const url = $("portal-url").value.trim() || P.PORTAL_DEFAULT_URL;
   chrome.tabs.create({ url: `${url.replace(/\/+$/, "")}/signup` });
 });
+
+async function runDeviceSignIn({ email } = {}) {
+  msg("portal-message", "");
+  const idp = identityUrl();
+  $("device-signin").disabled = true;
+  $("magic-send").disabled = true;
+  state.deviceCancelled = false;
+  try {
+    const started = await Flow.startDeviceFlow({ fetch: (u, o) => fetch(u, o), identityUrl: idp, email });
+    if (!started.ok) {
+      msg("portal-message", started.message, started.kind === "unreachable" ? "warn" : "error");
+      return;
+    }
+    state.device = started;
+    $("device-code").textContent = started.user_code;
+    $("device-box").classList.remove("hidden");
+    if (email) {
+      $("device-status").textContent =
+        `If ${email} has an Aitherium account, a sign-in link is on its way. Tap it (on any device), ` +
+        "then confirm this code. Waiting…";
+    } else {
+      $("device-status").textContent = "Waiting for you to approve in the tab we opened…";
+      chrome.tabs.create({ url: started.verification_uri_complete });
+    }
+    const result = await Flow.pollDeviceFlow({
+      fetch: (u, o) => fetch(u, o),
+      identityUrl: idp,
+      deviceCode: started.device_code,
+      interval: started.interval,
+      expiresIn: started.expires_in,
+      isCancelled: () => state.deviceCancelled,
+    });
+    if (!result.ok) {
+      if (result.kind !== "cancelled") {
+        msg("portal-message", result.message, result.kind === "unreachable" ? "warn" : "error");
+      }
+      $("device-box").classList.add("hidden");
+      return;
+    }
+    await P.setPortalBearer(result.token);
+    await P.setPortalRecord({
+      identity_url: idp, authenticated_at: Date.now(),
+      auth_method: email ? "device_email" : "device",
+    });
+    const me = await Flow.identityMe({ fetch: (u, o) => fetch(u, o), identityUrl: idp, token: result.token });
+    if (me.ok) state.user = me.user;
+    $("device-status").textContent = "Approved.";
+    msg("portal-message", `Signed in${state.user && state.user.email ? ` as ${state.user.email}` : ""}.`, "success");
+    setTimeout(() => initPortalMode(), 350);
+  } catch (e) {
+    msg("portal-message", Flow.UNREACHABLE_MESSAGE, "warn");
+  } finally {
+    $("device-signin").disabled = false;
+    $("magic-send").disabled = false;
+  }
+}
+
+$("device-signin").addEventListener("click", () => runDeviceSignIn());
+$("magic-send").addEventListener("click", () => {
+  const email = $("magic-email").value.trim();
+  if (!email || !email.includes("@")) {
+    msg("portal-message", "Enter the email address of your Aitherium account.");
+    return;
+  }
+  runDeviceSignIn({ email });
+});
+$("device-cancel").addEventListener("click", () => {
+  state.deviceCancelled = true;
+  $("device-box").classList.add("hidden");
+});
+$("device-reopen").addEventListener("click", () => {
+  if (state.device && state.device.verification_uri_complete) {
+    chrome.tabs.create({ url: state.device.verification_uri_complete });
+  }
+});
+
+/** A failure from the portal: "unreachable" wording for network/5xx. */
+function portalFailure(r, fallback) {
+  const c = Flow.classifyFailure({ status: r && r.status, error: r && r.status === undefined ? "network" : null });
+  if (c.kind === "unreachable") return { text: c.message, kind: "warn" };
+  return { text: (r && r.error) || fallback, kind: "error" };
+}
 
 $("do-login").addEventListener("click", async () => {
   msg("portal-message", "");
@@ -408,7 +568,8 @@ $("do-login").addEventListener("click", async () => {
         return;
       }
       if (!r.ok) {
-        msg("portal-message", r.error || "Sign-in failed.");
+        const f = portalFailure(r, "Sign-in failed.");
+        msg("portal-message", f.text, f.kind);
         return;
       }
     }
@@ -421,7 +582,7 @@ $("do-login").addEventListener("click", async () => {
     msg("portal-message", "Signed in.", "success");
     setTimeout(() => initPortalMode(), 350);
   } catch (e) {
-    msg("portal-message", `Network error: ${e.message}`);
+    msg("portal-message", Flow.UNREACHABLE_MESSAGE, "warn");
   } finally {
     $("do-login").disabled = false;
   }
@@ -436,6 +597,17 @@ function initPortalMode() {
   });
   state.portalMode = null;
   $("continue-to-provision").disabled = true;
+  // AitherOS on this computer: preselect "local", which needs nothing from the
+  // portal. "hybrid" registers with portal.aitherium.com, which can be down
+  // (measured 503 on 2026-09-27); the owner picks it deliberately.
+  if (state.local && state.local.found) {
+    const local = document.querySelector('#panel-3 .mode-card[data-mode="local"]');
+    if (local) {
+      local.classList.add("selected");
+      state.portalMode = "local";
+      $("continue-to-provision").disabled = false;
+    }
+  }
 }
 
 document.querySelectorAll("#panel-3 .mode-card").forEach((card) => {
@@ -492,29 +664,10 @@ $("back-from-provision").addEventListener("click", () => {
 $("recheck-local").addEventListener("click", recheckLocal);
 
 async function recheckLocal() {
-  await probeAndPaint("status-node", "http://127.0.0.1:8090/health");
-  const shell = $("status-shell");
-  shell.className = "status miss";
-  shell.textContent = "install via pip";
-}
-
-async function probeAndPaint(id, url) {
-  const el = $(id);
-  el.className = "status miss";
-  el.textContent = "checking…";
-  try {
-    const r = await fetch(url, { method: "GET", mode: "cors" });
-    if (r.ok) {
-      el.className = "status ok";
-      el.textContent = "running";
-    } else {
-      el.className = "status err";
-      el.textContent = `HTTP ${r.status}`;
-    }
-  } catch (_) {
-    el.className = "status miss";
-    el.textContent = "not detected";
-  }
+  $("provision-install-cmd").textContent = Flow.installCommand(Flow.platformOf());
+  const local = await detectLocal();
+  paintProbe("status-node", local.adk && local.adk.ok ? local.adk : local.awnode);
+  paintProbe("status-shell", local.awsh);
 }
 
 $("finish").addEventListener("click", async () => {
@@ -522,20 +675,35 @@ $("finish").addEventListener("click", async () => {
   $("finish").disabled = true;
   try {
     let bundle = null;
+    let degraded = null;
 
     if (state.portalMode === "cloud" || state.portalMode === "hybrid") {
       const name = $("agent-name").value.trim() || "browser-conn";
-      const r = await P.portalQuickOnboard({
-        agent_name: name,
-        description: "Awconnect browser extension",
-      });
-      if (!r.ok) {
-        msg("step4-message", r.error || "Portal onboard failed.");
-        return;
+      let r;
+      try {
+        r = await P.portalQuickOnboard({
+          agent_name: name,
+          description: "Awconnect browser extension",
+        });
+      } catch (_) {
+        r = { ok: false }; // network error: status undefined -> "unreachable"
       }
-      bundle = r.bundle;
-      state.bundle = bundle;
-      renderBundle(bundle);
+      if (!r.ok) {
+        const f = portalFailure(r, "Portal onboard failed.");
+        // Hybrid with the portal down: the local half still works, so finish
+        // local-only rather than dead-ending (register again later).
+        if (state.portalMode === "hybrid" && f.kind === "warn") {
+          state.portalMode = "local";
+          degraded = f.text;
+        } else {
+          msg("step4-message", f.text, f.kind);
+          return;
+        }
+      } else {
+        bundle = r.bundle;
+        state.bundle = bundle;
+        renderBundle(bundle);
+      }
     }
 
     const settings = await getCurrentSettings();
@@ -566,10 +734,13 @@ $("finish").addEventListener("click", async () => {
       aither_mode: state.portalMode,
     });
 
-    msg("step4-message", "Setup complete. You can close this tab.", "success");
+    msg("step4-message",
+      degraded ? `Set up for this computer only. ${degraded} Register with the portal later from Options.`
+        : "Setup complete. You can close this tab.",
+      degraded ? "warn" : "success");
     showPill(3);
   } catch (e) {
-    msg("step4-message", `Unexpected error: ${e.message}`);
+    msg("step4-message", Flow.UNREACHABLE_MESSAGE, "warn");
   } finally {
     $("finish").disabled = false;
   }

@@ -584,6 +584,17 @@
 
     <div class="toggle-row">
       <div>
+        <div class="toggle-label">Open the overlay on every page automatically</div>
+        <div class="toggle-hint">Off by default: the overlay only appears when you summon it with <kbd>Alt+O</kbd> or the popup, and <kbd>Alt+O</kbd> / &times; closes it again. Auto-start iframes the OS into every page you open and re-pads the page for the dock.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="osOverlayAutoStart" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
         <div class="toggle-label">Platform sync (awsync)</div>
         <div class="toggle-hint">Hourly heartbeat to your platform, plus pack-update and licence checks. Reports this node's status and whether your local AI gateway is reachable, and tells you when you have drifted out of step &mdash; it deliberately stays quiet when everything is fine. Off by default: it sends telemetry upward, which is your call. Does nothing until a platform URL and a sign-in are configured.</div>
       </div>
