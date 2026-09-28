@@ -1005,10 +1005,22 @@
         workspaceBadge.textContent = label;
         workspaceBadge.className = "topbar-context active";
         workspaceBadge.title = `User: ${s.userId || "—"}\nTenant: ${s.tenantId || "—"}\nWorkspace: ${s.workspaceId || "—"}\nProject: ${s.projectName || "—"}`;
+      } else if (s.userId) {
+        // Signed in (often via `adk login` on this machine) with no workspace
+        // binding: that is the platform scope, not "no workspace".
+        let auth = null;
+        try { auth = (await chrome.storage.local.get("aither_auth")).aither_auth || null; } catch { /* none */ }
+        const localOnly = auth && auth.source === "awdk" && !auth.user_bearer;
+        workspaceBadge.textContent = `${s.userId} · platform`;
+        workspaceBadge.className = "topbar-context active";
+        workspaceBadge.title = localOnly
+          ? `Signed in locally as ${s.userId}; cloud features pending`
+          : `User: ${s.userId}
+Scope: platform (no workspace selected)`;
       } else {
         workspaceBadge.textContent = "no workspace";
         workspaceBadge.className = "topbar-context";
-        workspaceBadge.title = "Configure tenant/workspace in extension options";
+        workspaceBadge.title = "Run `adk login` on this computer, or sign in from Options";
       }
     } catch { /* settings not available */ }
   }

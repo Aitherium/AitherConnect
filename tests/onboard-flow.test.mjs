@@ -13,8 +13,8 @@
  *   1. step 0 probes adk (:9001), awsh (:8362) and the gateway (:8182) and shows
  *      the one-line installer when none answers;
  *   2. sign-in is Identity's device flow (the endpoints `adk login` uses), the
- *      email option is the same flow with `email`, and the password form sits
- *      behind "Use a password instead";
+ *      email option is the same flow with `email`, and there is NO password
+ *      form (its /auth/login route never existed on the platform);
  *   3. a 5xx / network failure reads "unreachable (maintenance or offline)",
  *      never a generic error.
  * The behavioural half runs shared/onboard-flow.js in a vm sandbox with a stub fetch.
@@ -49,11 +49,10 @@ check('the old three-card chooser is gone', !html.includes('choice-portal') && !
 
 const panel2 = html.slice(html.indexOf('id="panel-2"'), html.indexOf('id="panel-3"'))
 const deviceAt = panel2.indexOf('id="device-signin"')
-const passwordAt = panel2.indexOf('id="login-password"')
 check('primary sign-in is the device flow button', deviceAt !== -1 && /btn primary big" id="device-signin"/.test(panel2))
 check('email-me-a-link option exists', panel2.includes('id="magic-email"') && panel2.includes('id="magic-send"'))
-check('password form sits behind "Use a password instead"',
-  passwordAt > deviceAt && /<details[^>]*id="password-details"[\s\S]*Use a password instead[\s\S]*id="login-password"/.test(panel2))
+check('no email+password form (the route does not exist)',
+  !/id="login-password"|id="do-login"/.test(html) && !/portalLogin|portalVerify2fa/.test(js))
 check('onboard.html loads local-endpoints + onboard-flow before onboard.js',
   html.indexOf('shared/local-endpoints.js') !== -1 &&
   html.indexOf('shared/onboard-flow.js') < html.indexOf('src="onboard.js"'))

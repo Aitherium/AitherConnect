@@ -30,7 +30,6 @@ let state = {
   byokProvider: null, // provider id
   byokConfig: null, // {id, apiKey, model, baseUrl, embeddingModel}
   portalMode: null, // 'cloud' | 'hybrid' | 'local'
-  temp2faToken: null,
   bundle: null,
   user: null,
   local: null, // last probeLocal() result
@@ -411,13 +410,9 @@ async function initPortal() {
 
   const rec = await P.getPortalRecord();
   $("portal-url").value = rec.url || P.PORTAL_DEFAULT_URL;
-  $("login-email").value = "";
-  $("login-password").value = "";
-  $("twofa-field").classList.add("hidden");
   $("device-box").classList.add("hidden");
   $("device-signin").disabled = false;
   msg("portal-message", "");
-  state.temp2faToken = null;
   $("skip-signin").classList.toggle("hidden", !(state.local && state.local.found));
 
   // The local node's identity, when its daemon will say (a name, never a token).
@@ -537,57 +532,6 @@ function portalFailure(r, fallback) {
   return { text: (r && r.error) || fallback, kind: "error" };
 }
 
-$("do-login").addEventListener("click", async () => {
-  msg("portal-message", "");
-  const url = $("portal-url").value.trim() || P.PORTAL_DEFAULT_URL;
-  await P.setPortalRecord({ url });
-
-  const email = $("login-email").value.trim();
-  const password = $("login-password").value;
-  if (!email || !password) {
-    msg("portal-message", "Email and password are required.");
-    return;
-  }
-
-  $("do-login").disabled = true;
-  try {
-    if (state.temp2faToken) {
-      const code = $("login-2fa").value.trim();
-      const r = await P.portalVerify2fa({ temp_token: state.temp2faToken, code });
-      if (!r.ok) {
-        msg("portal-message", r.error || "2FA verification failed.");
-        return;
-      }
-      state.temp2faToken = null;
-    } else {
-      const r = await P.portalLogin({ email, password });
-      if (!r.ok && r.requires_2fa) {
-        state.temp2faToken = r.temp_token;
-        $("twofa-field").classList.remove("hidden");
-        msg("portal-message", "Enter the 2FA code from your authenticator.", "warn");
-        return;
-      }
-      if (!r.ok) {
-        const f = portalFailure(r, "Sign-in failed.");
-        msg("portal-message", f.text, f.kind);
-        return;
-      }
-    }
-    const me = await P.portalMe();
-    if (!me.ok) {
-      msg("portal-message", "Signed in but could not load profile. Continuing.", "warn");
-    } else {
-      state.user = me.user;
-    }
-    msg("portal-message", "Signed in.", "success");
-    setTimeout(() => initPortalMode(), 350);
-  } catch (e) {
-    msg("portal-message", Flow.UNREACHABLE_MESSAGE, "warn");
-  } finally {
-    $("do-login").disabled = false;
-  }
-});
-
 function initPortalMode() {
   showPanel("panel-3");
   showPill(1);
@@ -678,18 +622,16 @@ $("finish").addEventListener("click", async () => {
     let degraded = null;
 
     if (state.portalMode === "cloud" || state.portalMode === "hybrid") {
-      const name = $("agent-name").value.trim() || "browser-conn";
+      // The signed-in account's workspaces ARE the scope (the old quick-onboard
+      // route never existed on the platform).
       let r;
       try {
-        r = await P.portalQuickOnboard({
-          agent_name: name,
-          description: "Awconnect browser extension",
-        });
+        r = await P.fetchWorkspaceMetadata();
       } catch (_) {
         r = { ok: false }; // network error: status undefined -> "unreachable"
       }
       if (!r.ok) {
-        const f = portalFailure(r, "Portal onboard failed.");
+        const f = portalFailure(r, "Could not load your workspaces.");
         // Hybrid with the portal down: the local half still works, so finish
         // local-only rather than dead-ending (register again later).
         if (state.portalMode === "hybrid" && f.kind === "warn") {
@@ -700,9 +642,9 @@ $("finish").addEventListener("click", async () => {
           return;
         }
       } else {
-        bundle = r.bundle;
+        const ws = (r.workspaces || []).find((w) => w.is_default || w.default) || (r.workspaces || [])[0];
+        bundle = ws ? { scope: { tenant_id: ws.tenant_id || "", workspace_id: ws.id || ws.slug || "" } } : null;
         state.bundle = bundle;
-        renderBundle(bundle);
       }
     }
 
@@ -745,21 +687,6 @@ $("finish").addEventListener("click", async () => {
     $("finish").disabled = false;
   }
 });
-
-function renderBundle(b) {
-  const scope = b.scope || {};
-  $("provision-result").innerHTML = `
-    <div class="message success">
-      Registered as <code>${escapeHtml(b.agent_name || "agent")}</code> (id
-      <code>${escapeHtml(b.agent_id || "")}</code>).
-    </div>
-    <div class="scope-list" style="margin-top:8px">
-      tenant: <span>${escapeHtml(scope.tenant_id || "—")}</span>
-      &nbsp;workspace: <span>${escapeHtml(scope.workspace_id || "—")}</span>
-      &nbsp;visibility: <span>${escapeHtml(scope.visibility || "workspace")}</span>
-    </div>
-  `;
-}
 
 // === SETTINGS BRIDGE ===
 

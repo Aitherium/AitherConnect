@@ -3,7 +3,7 @@
  * ===========================================================
  *
  * Authenticates to Genesis decision-card endpoints using the portal
- * session bearer token (from chrome.storage.session.aither_portal_bearer).
+ * session bearer token (the user_bearer in chrome.storage.local.aither_auth).
  *
  * Makes authenticated calls to http://localhost:8001/api/v1/decisions/*
  * (or via Veil bridge at http://localhost:3000/api/bridge/genesis/api/v1/decisions/*).
@@ -82,9 +82,8 @@
    */
   async function getPortalBearer() {
     try {
-      if (!chrome.storage.session) return null;
-      const { aither_portal_bearer } = await chrome.storage.session.get("aither_portal_bearer");
-      return aither_portal_bearer || null;
+      const AS = (typeof self !== "undefined" && self.AitherAuthStore) || null;
+      return AS ? await AS.getUserBearer() : null;
     } catch (e) {
       console.debug("[genesis-auth] could not read portal bearer:", e);
       return null;

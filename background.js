@@ -20,6 +20,7 @@ importScripts("shared/webml-mirror/webml-memory.js"); // AITHER_WEBML_MEMORY (ki
 // harness-auth dials its hardcoded 8362. 127.0.0.1, never localhost: ::1
 // refuses after 2120 ms while v4 connects in 3 ms (measured).
 importScripts("shared/local-endpoints.js",
+  "shared/extension-id.js", "shared/auth-store.js",
   "shared/tier-detect.js", "shared/portal-api.js", "shared/health-debounce.js",
   "shared/aitherbrowser.js", "shared/social-plan.js", "shared/harness-auth.js",
   "shared/awsync.js", "shared/link-bundle.js", "shared/product-catalog.js");
@@ -496,11 +497,8 @@ async function persistEntitlement(ent) {
 async function pullEntitlement() {
   const gateway = SETTINGS.cloudGatewayUrl || "https://gateway.aitherium.com";
   let token = SETTINGS.cloudApiKey || SETTINGS.apiKey || "";
-  if (!token && chrome.storage.session) {
-    try {
-      const { aither_portal_bearer } = await chrome.storage.session.get("aither_portal_bearer");
-      token = aither_portal_bearer || "";
-    } catch { /* no session storage */ }
+  if (!token && self.AitherAuthStore) {
+    try { token = (await self.AitherAuthStore.getUserBearer()) || ""; } catch { /* no storage */ }
   }
   if (!token) return { ok: false, reason: "not authenticated" };
 
@@ -1558,7 +1556,41 @@ function refreshLinkBundle(token) {
     .catch(() => {});
 }
 
+/** Rung 0: the user already ran `adk login` on this machine.
+ *  A stored user bearer wins; otherwise ask the local awdk daemon, which hands
+ *  a single-use ticket ONLY to this extension's pinned origin, and redeem it at
+ *  the IdP for this extension's own session. Never throws. */
+async function resolveFromLocalAdk() {
+  const AS = self.AitherAuthStore;
+  if (!AS) return { ok: false };
+  try {
+    const stored = await AS.get();
+    if (stored && stored.user_bearer) {
+      return { ok: true, source: stored.source || "awdk", cloud: true, token: stored.user_bearer,
+        identity: { ...stored.user } };
+    }
+    let adkBase = null;
+    try { adkBase = self.AitherLocalEndpoints ? await self.AitherLocalEndpoints.endpointFor("adk") : null; }
+    catch { adkBase = null; }
+    return await AS.signInFromLocalAdk({
+      adkBase: adkBase || `http://${LOOPBACK}:9001`,
+      audience: chrome.runtime.getURL("").slice(0, -1),
+      idpBase: AS.IDP_DEFAULT,
+    });
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 async function resolveIdentity() {
+  // 0. Signed in on this device (`adk login`): no typing at all.
+  const local = await resolveFromLocalAdk();
+  if (local.ok && local.token) {
+    try { await self.AitherPortal.setPortalBearer(local.token); } catch { /* no storage */ }
+    refreshLinkBundle(local.token);
+    return { ok: true, source: local.source, identity: local.identity, token: local.token };
+  }
+
   // 1. Find a token: settings API key > cloud gateway key > portal cookie.
   //    cloudApiKey is the credential pullEntitlement() uses (gateway-issued
   //    aither_sk_*/aither_pat_*) — omitting it here meant a cloud-authenticated
@@ -1584,16 +1616,18 @@ async function resolveIdentity() {
   // Publish the discovered credential as the PORTAL BEARER.
   //
   // Without this the cookie path resolved an identity and then dropped the
-  // token on the floor: `aither_portal_bearer` was written ONLY by the
-  // in-extension email+password login (portal-api.js portalLogin /
-  // portalVerify2fa). A user signed in at portal.aitherium.com in this very
+  // token on the floor: the portal bearer was written ONLY by the in-extension
+  // email+password login (since removed: its routes never existed). A user
+  // signed in at portal.aitherium.com in this very
   // browser therefore had every portal API call go out with NO Authorization
   // header — extension fetches are cross-origin to the portal, so the cookie
   // is never attached either. Three symptoms, one cause:
   //   * /api/me/workspaces  -> 401 -> empty list -> "no workspace"
   //   * mintRelayToken()    -> "not authenticated" -> IRC/relay never connects
   //   * pullEntitlement()   -> "not authenticated" -> owner stuck on tier Free
-  if (token) {
+  // A gateway key (cloudApiKey) is NOT a user bearer: it must never ride to
+  // /api/me/* as one. Only a settings key or a portal cookie is published.
+  if (token && source !== "cloud-key") {
     try { await self.AitherPortal.setPortalBearer(token); } catch { /* no session storage */ }
   }
 
@@ -1620,7 +1654,9 @@ async function resolveIdentity() {
     // /api/bridge/identity/auth/me catch-all does NOT (it maps to
     // getServiceUrl('identity')/auth/me, missing the /identity prefix, and
     // 401s on every call; verified live 2026-08-08).
-    meUrls.push("https://portal.aitherium.com/api/me/profile");
+    // portal.aitherium.com is retired; api.aitherium.com is the control plane.
+    // The gateway key is never presented to /api/me/*.
+    if (source !== "cloud-key") meUrls.push("https://api.aitherium.com/api/me/profile");
     for (const identityUrl of meUrls) {
       try {
         const resp = await fetch(identityUrl, {
@@ -1660,6 +1696,14 @@ async function resolveIdentity() {
     console.debug("[Awconnect] Local session probe failed:", e.message);
   }
 
+  // Signed in locally (the daemon knows who you are) but the IdP has not yet
+  // accepted this extension's audience: a real, named identity with no cloud
+  // bearer. Better than "no workspace"; cloud features wait for the bearer.
+  if (local.ok && local.identity && local.identity.username) {
+    return { ok: true, source: "awdk-local", localOnly: true, token: null,
+      identity: local.identity, note: local.note };
+  }
+
   // 4. Couldn't verify. If we have a usable token/credentials AND the failure
   //    was transient (NOT a 401/403 rejection), the user is still signed in —
   //    the verifier was just unreachable. Return the stored identity with an
@@ -1688,8 +1732,8 @@ async function resolveIdentity() {
     ok: false,
     authRejected,
     error: authRejected
-      ? "Your session expired or was rejected. Sign in again at portal.aitherium.com."
-      : "Not authenticated. Log in at portal.aitherium.com or run `aither login`.",
+      ? "Your session expired or was rejected. Sign in again, or run `adk login`."
+      : "Not signed in. Run `adk login` on this computer, or sign in from Options.",
   };
 }
 
@@ -1773,7 +1817,9 @@ async function applyIdentity(identity, token) {
   // portal session cookie (cross-site iframe), so the taskbar would sit at
   // "sign in" forever without this handoff.
   broadcastIdentityToOverlays();
-  return { ok: true, applied: updates };
+  // Never echo the bearer: this object is logged and sent to UI pages.
+  const { apiKey: _bearer, ...shown } = updates;
+  return { ok: true, applied: { ...shown, apiKey: _bearer ? "(set)" : undefined } };
 }
 
 /** Cheap, sync snapshot of the current identity from settings — no network.

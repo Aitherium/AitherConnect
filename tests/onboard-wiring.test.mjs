@@ -112,12 +112,12 @@ function makeWorld ({ localUp, portalThrows }) {
     return { ok: false, status: 503, json: async () => null }
   }
   const AitherPortal = {
-    PORTAL_DEFAULT_URL: 'https://portal.aitherium.com',
+    PORTAL_DEFAULT_URL: 'https://api.aitherium.com',
     getPortalRecord: async () => ({}),
     setPortalRecord: async () => {},
     setPortalBearer: async () => {},
-    getPortalUrl: async () => 'https://portal.aitherium.com',
-    portalQuickOnboard: async () => {
+    getPortalUrl: async () => 'https://api.aitherium.com',
+    fetchWorkspaceMetadata: async () => {
       if (portalThrows) throw new TypeError('Failed to fetch')
       return { ok: false, status: 503 }
     },

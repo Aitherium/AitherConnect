@@ -1,15 +1,23 @@
 /**
  * Portal API helpers — shared by the onboarding wizard and background worker.
  *
- * All calls go to portal.aitherium.com (or AITHER_PORTAL_URL override
- * persisted in chrome.storage.local).
+ * All calls go to api.aitherium.com (portal.aitherium.com is retired), or the
+ * url override persisted in chrome.storage.local.aither_portal.
  *
  * Storage layout:
- *   chrome.storage.session.aither_portal_bearer  → portal /auth bearer
- *   chrome.storage.local.aither_portal           → { url, scope, agent_id, api_key }
+ *   chrome.storage.local.aither_auth     → the ONE sign-in record (shared/auth-store.js);
+ *                                          the portal bearer is its user_bearer
+ *   chrome.storage.local.aither_portal   → { url, scope, agent_id, api_key }
+ *
+ * Sign-in is `adk login` on this machine (picked up with no typing) or the
+ * device flow in onboarding; there is no email+password form here.
  */
 
-const PORTAL_DEFAULT_URL = "https://portal.aitherium.com";
+const PORTAL_DEFAULT_URL = "https://api.aitherium.com";
+
+function _authStore() {
+  return (typeof self !== "undefined" && self.AitherAuthStore) || null;
+}
 
 async function getPortalUrl() {
   const { aither_portal } = await chrome.storage.local.get("aither_portal");
@@ -17,20 +25,13 @@ async function getPortalUrl() {
 }
 
 async function getPortalBearer() {
-  if (!chrome.storage.session) return null;
-  const { aither_portal_bearer } = await chrome.storage.session.get(
-    "aither_portal_bearer",
-  );
-  return aither_portal_bearer || null;
+  const AS = _authStore();
+  return AS ? AS.getUserBearer() : null;
 }
 
 async function setPortalBearer(token) {
-  if (!chrome.storage.session) return;
-  if (token) {
-    await chrome.storage.session.set({ aither_portal_bearer: token });
-  } else {
-    await chrome.storage.session.remove("aither_portal_bearer");
-  }
+  const AS = _authStore();
+  if (AS) await AS.setUserBearer(token || null);
 }
 
 async function getPortalRecord() {
@@ -70,38 +71,6 @@ async function portalFetch(path, init = {}) {
   return { ok: res.ok, status: res.status, payload };
 }
 
-async function portalLogin({ email, password }) {
-  const r = await portalFetch("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
-  if (!r.ok) {
-    return { ok: false, status: r.status, error: (r.payload && r.payload.error) || `login failed (${r.status})` };
-  }
-  if (r.payload?.requires_2fa) {
-    return { ok: false, requires_2fa: true, temp_token: r.payload.temp_token };
-  }
-  const token = r.payload?.access_token;
-  if (!token) return { ok: false, error: "no access_token in response" };
-  await setPortalBearer(token);
-  await setPortalRecord({ url: await getPortalUrl(), authenticated_at: Date.now() });
-  return { ok: true };
-}
-
-async function portalVerify2fa({ temp_token, code }) {
-  const r = await portalFetch("/auth/verify-2fa", {
-    method: "POST",
-    body: JSON.stringify({ temp_token, code }),
-  });
-  if (!r.ok) {
-    return { ok: false, error: (r.payload && r.payload.error) || `2fa failed (${r.status})` };
-  }
-  const token = r.payload?.access_token;
-  if (!token) return { ok: false, error: "no access_token in 2fa response" };
-  await setPortalBearer(token);
-  return { ok: true };
-}
-
 async function portalMe() {
   const r = await portalFetch("/auth/me");
   if (!r.ok) return { ok: false, status: r.status, error: r.payload?.error };
@@ -111,32 +80,6 @@ async function portalMe() {
 async function portalLogout() {
   await clearPortalRecord();
   return { ok: true };
-}
-
-/**
- * One-shot quick onboard — provisions a scoped agent identity for this browser.
- * Returns the connection bundle (api_key, workspace endpoints, inference URLs).
- */
-async function portalQuickOnboard({ agent_name, description }) {
-  const params = new URLSearchParams({
-    agent_name,
-    description: description || "Browser-based Awconnect agent",
-  });
-  const r = await portalFetch(`/api/onboard/quick?${params.toString()}`, {
-    method: "POST",
-  });
-  if (!r.ok) {
-    return { ok: false, status: r.status, error: (r.payload && r.payload.error) || `onboard failed (${r.status})` };
-  }
-  const bundle = r.payload || {};
-  await setPortalRecord({
-    agent_id: bundle.agent_id,
-    agent_name: bundle.agent_name || agent_name,
-    api_key: bundle.api_key || null,
-    scope: bundle.scope || null,
-    bundle,
-  });
-  return { ok: true, bundle };
 }
 
 /**
@@ -243,11 +186,8 @@ self.AitherPortal = {
   setPortalRecord,
   clearPortalRecord,
   portalFetch,
-  portalLogin,
-  portalVerify2fa,
   portalMe,
   portalLogout,
-  portalQuickOnboard,
   fetchWorkspaceMetadata,
   mintRelayToken,
   getProfileSettings,
