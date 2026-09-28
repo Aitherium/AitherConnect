@@ -3854,7 +3854,9 @@ ${res.error}
       // to render identically to a working app. Say so instead of pretending.
       const openable = !!app.route;
       const faded = !entitled || licenseGated || !openable;
-      const badgeHtml = !openable
+      const badgeHtml = app.product
+        ? `<span class="app-badge" style="background:#12263a;color:#60a5fa;">${escapeHtml(app.productBadge || "App")}</span>`
+        : !openable
         ? (app.localOnly
             ? `<span class="app-badge" style="background:#1e2a1e;color:#6b7280;">Runs locally</span>`
             : `<span class="app-badge" style="background:#2a1e1e;color:#6b7280;">Not launchable</span>`)
@@ -3880,7 +3882,7 @@ ${res.error}
             : `${escapeHtml(app.desc)} — add-on (not enabled on your plan)`;
       const portal = licenseGated ? (app.license.portal_url || "") : "";
       return `
-        <div class="app-card fade-in" data-route="${escapeHtml(app.route || "")}" data-name="${escapeHtml(app.name)}" data-entitled="${entitled ? 1 : 0}" data-openable="${openable ? 1 : 0}" data-local-only="${app.localOnly ? 1 : 0}" data-license-gated="${licenseGated ? 1 : 0}" data-portal="${escapeHtml(portal)}" title="${title}"${teaserStyle}>
+        <div class="app-card fade-in" data-product="${escapeHtml(app.product || "")}" data-route="${escapeHtml(app.route || "")}" data-name="${escapeHtml(app.name)}" data-entitled="${entitled ? 1 : 0}" data-openable="${openable ? 1 : 0}" data-local-only="${app.localOnly ? 1 : 0}" data-license-gated="${licenseGated ? 1 : 0}" data-portal="${escapeHtml(portal)}" title="${title}"${teaserStyle}>
           ${badgeHtml}
           <span class="app-icon">${app.icon}</span>
           <span class="app-name">${lock}${escapeHtml(app.name)}</span>
@@ -3892,6 +3894,10 @@ ${res.error}
     appsGrid.querySelectorAll(".app-card").forEach(card => {
       card.addEventListener("click", () => {
         const name = card.dataset.name;
+        if (card.dataset.product) {
+          openProductCard(card.dataset.product, name);
+          return;
+        }
         if (card.dataset.openable === "0") {
           const msg = card.dataset.localOnly === "1"
             ? `"${name}" runs on the owner's own machine via \`aither serve --workspace\` — it isn't reachable from here.`
@@ -4490,6 +4496,25 @@ ${res.error}
     });
   }
 
+  // A product card: launch the installed app through the native launcher, or
+  // open the page the launcher (or the catalog) names -- hosted app, download
+  // or shop. Only https pages are opened.
+  async function openProductCard(productId, name) {
+    let r = null;
+    try {
+      r = await chrome.runtime.sendMessage({ type: "launch-product", product: productId });
+    } catch { /* SW not ready */ }
+    if (r && r.ok) {
+      addEvent("APP", r.message || `${name} launching`);
+      return;
+    }
+    const url = r && /^https:\/\//i.test(r.url || "") ? r.url : null;
+    addEvent("APP", (r && r.message) || `${name}: opening its page`);
+    if (url) {
+      try { chrome.tabs.create({ url }); } catch { window.open(url, "_blank"); }
+    }
+  }
+
   // Discover installed extensions (vertical packs) that contribute an app.
   // FormBridge: present only when a FormBridge pack is configured; its UI is
   // served by the local engine, so the card opens the engine's own page.
@@ -4567,6 +4592,14 @@ ${res.error}
           installed: true,   // a detected local inference server is always entitled
         });
       }
+    } catch { /* SW not ready */ }
+    // Aitherium products (Deep Research Studio, Saga, Agent Home, Iris): the
+    // add-on catalog. Install/license state comes from the host's native
+    // launcher (awdk is_pack_available); a click launches, opens or shops.
+    try {
+      const ps = await chrome.runtime.sendMessage({ type: "products-status" });
+      DYNAMIC_APPS = DYNAMIC_APPS.filter((a) => !a.product);
+      if (ps && Array.isArray(ps.cards)) DYNAMIC_APPS.push(...ps.cards);
     } catch { /* SW not ready */ }
     renderApps();
   }

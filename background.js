@@ -22,7 +22,7 @@ importScripts("shared/webml-mirror/webml-memory.js"); // AITHER_WEBML_MEMORY (ki
 importScripts("shared/local-endpoints.js",
   "shared/tier-detect.js", "shared/portal-api.js", "shared/health-debounce.js",
   "shared/aitherbrowser.js", "shared/social-plan.js", "shared/harness-auth.js",
-  "shared/awsync.js", "shared/link-bundle.js");
+  "shared/awsync.js", "shared/link-bundle.js", "shared/product-catalog.js");
 
 // BYOK provider mode + local knowledge base (standalone, no fleet required).
 // Order matters: providers/feature-hash have no deps; embeddings needs both;
@@ -8469,6 +8469,58 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({
           ok: false,
           message: "Cannot launch Deep Research (managed) — the native launcher must be running on the host.",
+        });
+      })();
+      return true;
+
+    // ── Aitherium products add-on catalog (Deep Research, Saga, Agent Home, Iris) ──
+    // Install + license state is the host's: the native launcher answers GET
+    // /products with awdk's is_pack_available() per product. Launcher down =>
+    // the catalog's offline rows (license unknown, card opens the shop).
+    case "products-status":
+      (async () => {
+        const cat = self.AitherProductCatalog;
+        let rows = null;
+        try {
+          const resp = await fetch("http://127.0.0.1:8299/products", {
+            headers: authHeaders(), signal: AbortSignal.timeout(4000),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data && Array.isArray(data.products)) rows = data.products;
+          }
+        } catch { /* launcher not running */ }
+        const merged = cat.mergeStatus(rows);
+        sendResponse({ ok: true, launcher: rows !== null, products: merged, cards: cat.appCards(merged) });
+      })();
+      return true;
+
+    // Launch an installed product through the native launcher. When it cannot
+    // (not installed / hosted), the launcher returns the action + url to take
+    // instead and the sidepanel opens that page.
+    case "launch-product":
+      (async () => {
+        const cat = self.AitherProductCatalog;
+        const product = cat.byId(message && message.product);
+        if (!product) { sendResponse({ ok: false, message: "unknown product" }); return; }
+        try {
+          const resp = await fetch("http://127.0.0.1:8299/launch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify({ product: product.id }),
+            signal: AbortSignal.timeout(5000),
+          });
+          const data = await resp.json().catch(() => ({}));
+          const url = /^https:\/\//i.test(data.url || "") ? data.url : cat.shopUrl(product);
+          sendResponse({
+            ok: !!data.ok, action: data.action || null, url,
+            message: data.message || (data.ok ? `${product.name} launching` : "Launch failed"),
+          });
+          return;
+        } catch { /* launcher not running */ }
+        sendResponse({
+          ok: false, action: "shop", url: cat.shopUrl(product),
+          message: `Cannot launch ${product.name} — the native launcher is not running on the host.`,
         });
       })();
       return true;
