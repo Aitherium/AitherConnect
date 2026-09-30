@@ -23,7 +23,19 @@ importScripts("shared/local-endpoints.js",
   "shared/extension-id.js", "shared/auth-store.js", "shared/oidc-pkce.js",
   "shared/tier-detect.js", "shared/portal-api.js", "shared/health-debounce.js",
   "shared/aitherbrowser.js", "shared/social-plan.js", "shared/harness-auth.js",
-  "shared/awsync.js", "shared/link-bundle.js", "shared/product-catalog.js");
+  "shared/awsync.js", "shared/link-bundle.js", "shared/product-catalog.js",
+  // Decisions go through HarnessAuth (awsh) only; the retired Genesis auth
+  // module is no longer loaded.
+  // workspace-plane: sign-in record -> workspace, cloud credential, agents, badge.
+  "shared/workspace-plane.js",
+  // desk-bridge: page context and reactions to the awdesk bridge.
+  "shared/desk-bridge.js");
+
+// Pairing progress (the code to approve on the desk) reaches the popup and the
+// side panel from here, the one context that runs the pairing flow.
+self.HarnessAuth.onState((state) => {
+  chrome.runtime.sendMessage({ type: "harness-pair-state", state }).catch(() => {});
+});
 
 // BYOK provider mode + local knowledge base (standalone, no fleet required).
 // Order matters: providers/feature-hash have no deps; embeddings needs both;
@@ -48,6 +60,7 @@ importScripts(
 // =============================================================================
 
 const DEFAULT_SETTINGS = {
+  deskSpeakReplies: false,               // speak assistant replies on the awdesk avatar (opt-in)
   baseUrl: "http://localhost",           // Only used for remote mode fallback
   genesisPort: 8001,
   veilPort: 3000,                        // Veil (HTTP) — the bridge proxy entry point
@@ -82,7 +95,7 @@ const DEFAULT_SETTINGS = {
   cloudApiKey: "",                       // API key for cloud gateway (aither_sk_live_* / aither_pat_*)
   cloudGatewayUrl: "https://gateway.aitherium.com",
   mcpUrl: "https://mcp.aitherium.com/mcp",  // MCP gateway (remote-only, requires auth)
-  preferredTier: "auto",                 // "auto" | "genesis" | "node" | "cloud" | "provider"
+  preferredTier: "auto",                 // "auto" | "genesis" | "local-agent" | "node" | "cloud" | "provider"
   // BYOK / local knowledge base (provider API key lives in chrome.storage.local
   // "aither-provider", NOT here — sync storage roams through Google)
   ragEnabled: true,                      // Ground provider-tier chat in the local KB
@@ -259,6 +272,26 @@ function recalcUrls() {
     LYRAWIKI_URL = "";
     RELAY_URL = SETTINGS.relayUrl || "";
     RELAY_WS = SETTINGS.relayWsUrl || "";
+  } else if (DETECTED_TIER === "local-agent" && TIER_URLS.chatUrl) {
+    // Local agent — the awdk daemon. It is not the fleet: every fleet-side
+    // URL is cleared so a caller fails fast instead of dialing a dead :3000
+    // bridge and reporting the fleet as "down" on a machine that never ran it.
+    VEIL_URL = "";
+    GENESIS_URL = "";
+    GENESIS_WS = "";
+    PULSE_URL = "";
+    MIND_URL = "";
+    NODE_URL = "";
+    NEXUS_URL = "";
+    SEARCH_URL = "";
+    BROWSER_URL = "";
+    BONSAI_URL = "";
+    STRATA_URL = "";
+    THEMIS_URL = "";
+    NEWSWIRE_URL = "";
+    LYRAWIKI_URL = "";
+    RELAY_URL = SETTINGS.relayUrl || "";
+    RELAY_WS = SETTINGS.relayWsUrl || "";
   } else if (DETECTED_TIER === "cloud-only" && TIER_URLS.chatUrl) {
     // Cloud-only mode — gateway.aitherium.com
     const gateway = TIER_URLS.chatUrl;
@@ -358,6 +391,14 @@ async function autoDetectTier() {
         chatUrl: `http://${LOOPBACK}:${veil}/api/bridge/genesis`,
         nodeUrl: `http://${LOOPBACK}:${veil}/api/bridge/node`,
       };
+    } else if (forced === "local-agent" || forced === "adk") {
+      // Forced, but still PROBED: forcing a tier whose daemon is down would
+      // put "Local agent" on the badge of a machine with no agent running.
+      const la = await TierDetect.detectLocalAgent();
+      newTier = la ? "local-agent" : "offline";
+      newUrls = la
+        ? { chatUrl: la.chatUrl, nodeUrl: null, chatShape: la.chatShape, capabilities: la.capabilities }
+        : { chatUrl: null, nodeUrl: null };
     } else if (forced === "node") {
       newTier = "node-only";
       newUrls = { chatUrl: `http://${LOOPBACK}:${node}`, nodeUrl: `http://${LOOPBACK}:${node}` };
@@ -380,7 +421,7 @@ async function autoDetectTier() {
         nodePort: SETTINGS.nodePort,
         genesisPort: SETTINGS.genesisPort,
       },
-      SETTINGS.cloudApiKey || SETTINGS.apiKey,
+      cloudToken() || SETTINGS.apiKey,
       SETTINGS.cloudGatewayUrl,
       PROVIDER_CFG,
     );
@@ -390,8 +431,15 @@ async function autoDetectTier() {
       nodeUrl: result.nodeUrl,
       veilPort: result.veilPort,
       direct: result.direct,
+      chatShape: result.chatShape,
+      capabilities: result.capabilities,
     };
   }
+
+  // Local surfaces (awdk, awsh, aw hub, awdesk, awnode) are CAPABILITY
+  // SOURCES, not chat tiers: reported on their own every cycle so the status
+  // strip says exactly which are up, whatever the chat tier is.
+  refreshLocalSurfaces();
 
   // ── Demotion debounce ────────────────────────────────────────────────
   // UPGRADES apply instantly; DOWNGRADES must be confirmed by consecutive
@@ -439,14 +487,177 @@ async function autoDetectTier() {
 
   if (tierChanged) {
     console.log(`[Awconnect] Tier changed: ${DETECTED_TIER} → URLs:`, TIER_URLS);
-    broadcastToSidePanel({
-      type: "tier-changed",
-      tier: DETECTED_TIER,
-      chatUrl: TIER_URLS.chatUrl,
-      nodeUrl: TIER_URLS.nodeUrl,
-      capabilities: TierDetect.capabilitiesFor(DETECTED_TIER),
-      provider: DETECTED_TIER === "provider" ? (PROVIDER_CFG?.id || null) : null,
+    broadcastToSidePanel(tierChangedMessage());
+  }
+}
+
+/** The tier-changed payload. One builder so get-status and the broadcast
+ *  cannot drift: the side panel renders its greeting from either. */
+function tierChangedMessage() {
+  return {
+    type: "tier-changed",
+    tier: DETECTED_TIER,
+    chatUrl: TIER_URLS.chatUrl,
+    nodeUrl: TIER_URLS.nodeUrl,
+    capabilities: {
+      ...TierDetect.capabilitiesFor(DETECTED_TIER),
+      ...(TIER_URLS.capabilities || {}),
+    },
+    provider: DETECTED_TIER === "provider" ? (PROVIDER_CFG?.id || null) : null,
+    localSurfaces: LOCAL_SURFACES,
+  };
+}
+
+/** Last local-surfaces snapshot ({adk:{up,url,version?}, awsh:..., ...}). */
+let LOCAL_SURFACES = null;
+let _localSurfacesInFlight = null;
+
+/** Probe /health on awdk, awsh, aw hub, awdesk and awnode in parallel and
+ *  send the snapshot to the side panel as "local-surfaces". Health only --
+ *  no bearer, no Origin-sensitive endpoint. Never throws. */
+function refreshLocalSurfaces() {
+  if (_localSurfacesInFlight) return _localSurfacesInFlight;
+  _localSurfacesInFlight = TierDetect.localSurfaces()
+    .then((surfaces) => {
+      LOCAL_SURFACES = surfaces;
+      broadcastToSidePanel({ type: "local-surfaces", surfaces, tier: DETECTED_TIER });
+      return surfaces;
+    })
+    .catch(() => LOCAL_SURFACES)
+    .finally(() => { _localSurfacesInFlight = null; });
+  return _localSurfacesInFlight;
+}
+
+/**
+ * Chat with the awdk daemon (local-agent tier). POST {adk}/chat/stream -- the
+ * Genesis-compatible SSE lane -- and fall back to the OpenAI-compatible
+ * /v1/chat/completions when that lane is absent (older daemons). Emits the
+ * same chat-event stream the side panel already renders.
+ */
+async function handleLocalAgentChat(message, sendResponse) {
+  const base = (TIER_URLS.chatUrl || "").replace(/\/+$/, "");
+  const fail = (msg) => {
+    broadcastToSidePanel({ type: "chat-event", event: "error", data: { error: msg } });
+    sendResponse({ success: false, error: msg });
+  };
+  if (!base) return fail(TierDetect.OFFLINE_CHAT_MESSAGE);
+  const serverSessionId = await ensureServerSessionId();
+  const hdrs = { "Content-Type": "application/json" };
+  const refused = (status) =>
+    `awdk refused the request (${status}): the daemon was started with an API key. ` +
+    "Restart it without one for local use.";
+
+  broadcastToSidePanel({ type: "chat-event", event: "pipeline", data: {
+    stage: "stream", message: "Connecting to the local agent (awdk)...",
+  }});
+
+  let resp = null;
+  let lane = "chat/stream";
+  try {
+    resp = await fetch(`${base}/chat/stream`, {
+      method: "POST",
+      headers: hdrs,
+      body: JSON.stringify({
+        message: message.text,
+        session_id: serverSessionId,
+        ...(message.agent ? { agent: message.agent } : {}),
+      }),
+      // Agentic turns legitimately run for minutes; this is a stuck-socket
+      // backstop, not a latency budget.
+      signal: AbortSignal.timeout(1800000),
     });
+  } catch {
+    resp = null;
+  }
+  if (resp && (resp.status === 401 || resp.status === 403)) return fail(refused(resp.status));
+  const sseOk = resp && resp.ok && resp.body &&
+    (resp.headers.get("content-type") || "").includes("text/event-stream");
+  if (!sseOk) {
+    lane = "v1/chat/completions";
+    try {
+      resp = await fetch(`${base}/v1/chat/completions`, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify({
+          model: "auto",
+          messages: [{ role: "user", content: message.text }],
+          stream: true,
+          session_id: serverSessionId,
+        }),
+        signal: AbortSignal.timeout(600000),
+      });
+    } catch (err) {
+      autoDetectTier();
+      return fail(`The local agent (awdk) did not answer: ${err.message}. Is 'adk serve' still running?`);
+    }
+    if (resp.status === 401 || resp.status === 403) return fail(refused(resp.status));
+    if (!resp.ok || !resp.body) {
+      const t = await resp.text().catch(() => resp.statusText);
+      return fail(`The local agent (awdk) returned ${resp.status}: ${String(t).slice(0, 200)}`);
+    }
+  }
+
+  sendResponse({ success: true, streaming: true });
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let full = "";
+  let sessionId = null;
+  let errored = false;
+  const emit = (text) => {
+    if (!text) return;
+    full += text;
+    broadcastToSidePanel({ type: "chat-event", event: "chunk", data: { content: text } });
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop() || "";
+      for (const block of blocks) {
+        let ev = "message";
+        const dataLines = [];
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) ev = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+        }
+        if (!dataLines.length) continue;
+        const payload = dataLines.join("\n");
+        if (payload === "[DONE]") continue;
+        let data;
+        try { data = JSON.parse(payload); } catch { continue; }
+        if (lane !== "chat/stream") {
+          emit(data.choices?.[0]?.delta?.content || "");
+          continue;
+        }
+        const m = TierDetect.adkEventToChat(ev, data);
+        if (m.kind === "chunk") emit(m.text);
+        else if (m.kind === "answer" && !full) emit(m.text);
+        else if (m.kind === "session") sessionId = m.data.session_id || sessionId;
+        else if (m.kind === "tool") {
+          broadcastToSidePanel({ type: "chat-event", event: "pipeline", data: {
+            stage: "tool", message: m.data.type === "tool_call"
+              ? `Tool: ${(m.data.tools || []).map((t) => t.name).join(", ")}`
+              : "Tool result received",
+          }});
+        } else if (m.kind === "error") {
+          errored = true;
+          broadcastToSidePanel({ type: "chat-event", event: "error", data: { error: `awdk: ${m.text}` } });
+        }
+      }
+    }
+  } catch (err) {
+    errored = true;
+    broadcastToSidePanel({ type: "chat-event", event: "error", data: { error: `Local agent stream interrupted: ${err.message}` } });
+  }
+  if (!errored || full) {
+    broadcastToSidePanel({ type: "chat-event", event: "complete", data: {
+      type: "complete", content: full, model: "awdk", artifacts: [],
+      session_id: sessionId || serverSessionId,
+    }});
   }
 }
 
@@ -496,7 +707,7 @@ async function persistEntitlement(ent) {
  */
 async function pullEntitlement() {
   const gateway = SETTINGS.cloudGatewayUrl || "https://gateway.aitherium.com";
-  let token = SETTINGS.cloudApiKey || SETTINGS.apiKey || "";
+  let token = cloudToken() || SETTINGS.apiKey || "";
   if (!token && self.AitherAuthStore) {
     try { token = (await self.AitherAuthStore.getUserBearer()) || ""; } catch { /* no storage */ }
   }
@@ -856,9 +1067,9 @@ async function xGetSearchContext(topic) {
 
   // Build auth headers — same as composition calls.
   const searchHeaders = { "Content-Type": "application/json" };
-  if (DETECTED_TIER === "cloud-only" && SETTINGS.cloudApiKey) {
-    searchHeaders["Authorization"] = `Bearer ${SETTINGS.cloudApiKey}`;
-    searchHeaders["X-API-Key"] = SETTINGS.cloudApiKey;
+  if (DETECTED_TIER === "cloud-only" && cloudToken()) {
+    searchHeaders["Authorization"] = `Bearer ${cloudToken()}`;
+    searchHeaders["X-API-Key"] = cloudToken();
   }
   if (SETTINGS.tenantId) {
     searchHeaders["X-Tenant-ID"] = SETTINGS.tenantId;
@@ -1661,7 +1872,7 @@ async function resolveIdentity() {
   //    user resolved a tier but never an identity, and the badge sat at
   //    "no workspace" forever (the sidepanel refuses to apply `unverified`
   //    cached identities, so nothing ever escaped it).
-  let token = SETTINGS.apiKey || SETTINGS.cloudApiKey || null;
+  let token = SETTINGS.apiKey || cloudToken() || null;
   let source = token ? (SETTINGS.apiKey ? "settings" : "cloud-key") : null;
 
   if (!token) {
@@ -1773,7 +1984,7 @@ async function resolveIdentity() {
   //    the verifier was just unreachable. Return the stored identity with an
   //    `unverified` flag so the UI keeps the session instead of flipping to
   //    "Not authenticated".
-  const haveStored = !!(token || SETTINGS.userId || SETTINGS.cloudApiKey);
+  const haveStored = !!(token || SETTINGS.userId || cloudToken());
   if (haveStored && !authRejected) {
     const _slug = (SETTINGS.tenantId || "").replace(/^tnt_/, "");
     return {
@@ -1810,6 +2021,25 @@ async function resolveIdentity() {
  *  platform while every underlying call was perfectly authenticated. The
  *  workspace list has its own endpoint — ask it. */
 async function resolveDefaultWorkspace() {
+  // The persistent sign-in record first: GET api.aitherium.com/api/me/workspaces
+  // with the user's own bearer. One workspace is picked; several go to the
+  // picker (refreshWorkspacePlane), never silently the first.
+  const P = self.AitherWorkspacePlane;
+  if (P) {
+    try {
+      const auth = await P.readAuth();
+      if (auth && auth.user_bearer) {
+        const r = await P.fetchWorkspaces({ bearer: auth.user_bearer });
+        if (r.ok) {
+          const persisted = await P.persistedWorkspace();
+          const pick = P.chooseWorkspace(r.workspaces, persisted && persisted.id);
+          return pick.selected || null;
+        }
+      }
+    } catch (e) {
+      console.debug("[Awconnect] cloud workspace lookup failed:", e.message);
+    }
+  }
   try {
     const res = await self.AitherPortal.fetchWorkspaceMetadata();
     if (!res || !res.ok || !Array.isArray(res.workspaces) || !res.workspaces.length) return null;
@@ -3437,6 +3667,75 @@ let connectedApps = new Map();
 // Multi-tier connectivity state
 let DETECTED_TIER = "unknown";   // "genesis" | "node-only" | "cloud-only" | "offline" | "unknown"
 let TIER_URLS = {};              // { chatUrl, nodeUrl } from TierDetect
+
+// The cloud credential, from the sign-in record (auth.gateway_key, else the
+// user's own bearer), refreshed by refreshWorkspacePlane(). A hand-pasted
+// settings key is only the last fallback -- nobody should have to paste one.
+let CLOUD_CRED = { token: null, kind: null };
+function cloudToken() {
+  return CLOUD_CRED.token || SETTINGS.cloudApiKey || "";
+}
+let WS_PLANE = null;   // last refreshWorkspacePlane() result, for the side panel
+
+/** Cheap, offline: read the sign-in record into CLOUD_CRED before tier detection. */
+async function loadCloudCredential() {
+  const P = self.AitherWorkspacePlane;
+  if (!P) return;
+  try {
+    CLOUD_CRED = P.cloudCredential(await P.readAuth(), { cloudApiKey: SETTINGS.cloudApiKey });
+  } catch { /* keep the last credential */ }
+}
+
+/**
+ * After sign-in: bundle, workspaces, selection, badge, agents. Uses the
+ * persistent sign-in record so it survives a browser restart. Never throws.
+ */
+async function refreshWorkspacePlane({ force = false } = {}) {
+  const P = self.AitherWorkspacePlane;
+  if (!P) return { ok: false, error: "workspace plane not loaded" };
+  try {
+    const auth = await P.readAuth();
+    CLOUD_CRED = P.cloudCredential(auth, { cloudApiKey: SETTINGS.cloudApiKey });
+    const bearer = (auth && auth.user_bearer) || null;
+    if (bearer) {
+      // The settings hub (PUT /api/settings/preferences) and every portal call
+      // read the portal bearer; seed it from the persistent record.
+      try { await self.AitherPortal.setPortalBearer(bearer); } catch { /* no session storage */ }
+    }
+    const bundleRes = await P.ensureBundle({ bearer, now: force ? 0 : Date.now() });
+    const derived = P.fromBundle(bundleRes.bundle, null);
+    if (derived.capabilities) {
+      try { await chrome.storage.local.set({ "aither-bundle-capabilities": derived.capabilities }); } catch { /* ignore */ }
+    }
+    const workspaces = await P.fetchWorkspaces({ bearer });
+    const persisted = await P.persistedWorkspace();
+    const pick = P.chooseWorkspace(workspaces.workspaces, (persisted && persisted.id) || SETTINGS.workspaceId);
+    if (pick.selected) {
+      const id = P.wsId(pick.selected);
+      await P.persistWorkspace(pick.selected);
+      if (id && id !== SETTINGS.workspaceId) await saveSettings({ ...SETTINGS, workspaceId: id });
+    }
+    const agents = await P.listCloudAgents({
+      bearer, workspaceId: pick.selected ? P.wsId(pick.selected) : "", bundle: bundleRes.bundle,
+    });
+    WS_PLANE = {
+      ok: true,
+      user: auth && auth.user ? auth.user : null,
+      credentialKind: CLOUD_CRED.kind,
+      workspaces: workspaces.workspaces,
+      workspacesStatus: workspaces.ok ? 200 : workspaces.status,
+      selection: { mode: pick.mode, id: pick.selected ? P.wsId(pick.selected) : null,
+        suggested: pick.suggested ? P.wsId(pick.suggested) : null },
+      badge: P.badge({ auth, workspaces, selected: pick.selected }),
+      agents,
+      bundleSource: derived.source,
+      preferredTier: SETTINGS.preferredTier || "auto",
+    };
+    return WS_PLANE;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
 let _tierDemoteStrikes = 0;      // consecutive polls proposing a WORSE tier (see autoDetectTier)
 
 // Agent context bridge state
@@ -3586,6 +3885,21 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   chrome.contextMenus.create({
     id: "aither-parent",
     title: "Awconnect",
+    contexts: ["selection", "page"],
+  });
+
+  // awdesk: the avatar says the selection; the page (and selection) becomes
+  // context for the desk's command agent.
+  chrome.contextMenus.create({
+    id: "desk-say",
+    parentId: "aither-parent",
+    title: 'Say on desk: "%s"',
+    contexts: ["selection"],
+  });
+  chrome.contextMenus.create({
+    id: "desk-send-page",
+    parentId: "aither-parent",
+    title: "Send page to desk",
     contexts: ["selection", "page"],
   });
 
@@ -3742,11 +4056,19 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   autoResolveIdentity("install").catch(() => {});
 });
 
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.aither_auth) {
+    loadCloudCredential().then(() => refreshWorkspacePlane({ force: true })).catch(() => {});
+  }
+});
+
 chrome.runtime.onStartup.addListener(async () => {
   console.log("[Awconnect] Browser started, reconnecting...");
   await loadSettings();
   await loadProviderConfig();
+  await loadCloudCredential();
   await autoDetectTier();
+  refreshWorkspacePlane().catch(() => {});
   await bootstrapCtaAdapters();
   await ensureAlarms();
   ensureOidcReauthAlarm();
@@ -3987,32 +4309,62 @@ function sendAgentContextResponse(requestId, context, error = null) {
   }));
 }
 
-// Push context to Genesis on tab change (agents always have fresh context)
+// Push context to Genesis on tab change (agents always have fresh context).
+//
+// NOT gated on `isConnected`: that flag lives in memory and starts false on every service-
+// worker wake, and a tab switch IS what wakes a suspended worker -- so the gate dropped the
+// very events it was meant to send (measured 2026-09-28: the store stayed empty for a day
+// while a manual push to the same route landed at once). A push while offline is one
+// fetch that fails quietly; that is cheaper than being blind.
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  if (!isConnected) return;
   // Flush dwell for the page being left BEFORE anything async — an await here
   // would attribute the old page's time to the new one.
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
-    ambientSwitchTo(activeInfo.tabId, tab.url, tab.title);
+    if (isConnected) ambientSwitchTo(activeInfo.tabId, tab.url, tab.title);
   } catch { /* tab vanished */ }
   try {
-    const ctx = await extractActiveTabContext({ include_text: false });
+    const ctx = await activeTabContextOrBasic();
     pushContextToGenesis(ctx, "tab_activated");
+    _lastContextPushAt = Date.now();
   } catch { /* tab not ready yet */ }
 });
 
+// Genesis keeps a pushed tab for 5 minutes; someone reading one page for longer would read as
+// "no browser". The 30 s health alarm re-sends the active tab every 2 minutes.
+const CONTEXT_REFRESH_MS = 2 * 60 * 1000;
+let _lastContextPushAt = 0;
+async function refreshActiveTabContext() {
+  if (Date.now() - _lastContextPushAt < CONTEXT_REFRESH_MS) return;
+  try {
+    const ctx = await activeTabContextOrBasic();
+    pushContextToGenesis(ctx, "refresh");
+    _lastContextPushAt = Date.now();
+  } catch { /* no active tab (all windows minimised) */ }
+}
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.status !== "complete" || !tab.active || !isConnected) return;
-  ambientSwitchTo(tabId, tab.url, tab.title);
+  if (changeInfo.status !== "complete" || !tab.active) return;   // see onActivated: no isConnected gate
+  if (isConnected) ambientSwitchTo(tabId, tab.url, tab.title);
   // Small delay to let page finish rendering
   setTimeout(async () => {
     try {
-      const ctx = await extractActiveTabContext({ include_text: false });
+      const ctx = await activeTabContextOrBasic();
       pushContextToGenesis(ctx, "page_loaded");
+      _lastContextPushAt = Date.now();
     } catch { /* content script not ready */ }
   }, 1500);
 });
+
+async function activeTabContextOrBasic() {
+  try {
+    return await extractActiveTabContext({ include_text: false });
+  } catch (err) {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab?.url) throw err;
+    return { url: tab.url, title: tab.title || "", basic: true };
+  }
+}
 
 function pushContextToGenesis(context, trigger) {
   if (genesisSocket && genesisSocket.readyState === WebSocket.OPEN) {
@@ -4440,6 +4792,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
   if (alarm.name === "health-check") {
     await checkHealth();
+    await refreshActiveTabContext();
     // Piggyback on the existing 30s cadence rather than adding another alarm.
     // checkHealth() calls updateBadge(), so refreshing after it keeps a pending
     // card count from being overwritten by the ambient health badge.
@@ -4630,7 +4983,7 @@ async function checkHealth() {
   // Tier detection already confirmed the backend is reachable, so reflect that:
   // a detected non-fleet tier is online. (This is what made an owner see
   // "cloud-only degraded" flapping while DeepSeek chat worked fine.)
-  if (["cloud-only", "node-only", "provider"].includes(DETECTED_TIER)) {
+  if (["cloud-only", "node-only", "provider", "local-agent"].includes(DETECTED_TIER)) {
     aitherOSStatus = "online";
     isConnected = true;
     updateBadge("online");
@@ -4839,6 +5192,20 @@ const CONTEXT_MENU_PROMPTS = {
 };
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === "desk-say" || info.menuItemId === "desk-send-page") {
+    const result = info.menuItemId === "desk-say"
+      ? await self.DeskBridge.speak(info.selectionText || "")
+      : await self.DeskBridge.sendPage({ url: tab?.url, title: tab?.title, selection: info.selectionText || "" });
+    if (!result.ok) {
+      chrome.notifications?.create?.({
+        type: "basic",
+        iconUrl: "icons/icon128.png",
+        title: "awconnect",
+        message: result.error || "awdesk did not accept that",
+      });
+    }
+    return;
+  }
   if (info.menuItemId === "aither-x-post") {
     await xComposeAndPost(tab);
     return;
@@ -5316,7 +5683,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try {
           let identity = buildIdentityFromSettings();
           if (!identity.verified) {
-            let hasCredential = !!(SETTINGS.apiKey || SETTINGS.cloudApiKey);
+            let hasCredential = !!(SETTINGS.apiKey || cloudToken());
             if (!hasCredential) {
               for (const domain of ["portal.aitherium.com", "demo.aitherium.com", ".aitherium.com"]) {
                 try {
@@ -6236,6 +6603,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       (async () => {
         const tier = DETECTED_TIER;
 
+        // ── Local agent: the awdk daemon on this machine ──
+        if (tier === "local-agent") {
+          await handleLocalAgentChat(message, sendResponse);
+          return;
+        }
+
+        // ── Offline: fail FAST with what to do. Falling through to the
+        //    Genesis path dialed the dead :3000 bridge and made the person
+        //    wait out a timeout for an error that said nothing useful. A
+        //    remoteUrl deployment routes its own GENESIS_URL, so it is exempt.
+        if (tier === "offline" && !SETTINGS.remoteUrl) {
+          const msg = TierDetect.OFFLINE_CHAT_MESSAGE;
+          broadcastToSidePanel({ type: "chat-event", event: "error", data: { error: msg } });
+          sendResponse({ success: false, error: msg });
+          autoDetectTier();
+          return;
+        }
+
         // ── Node-only / Cloud-only / BYOK provider: OpenAI-compat SSE ──
         if (tier === "node-only" || tier === "cloud-only" || tier === "provider") {
           let requestUrl, hdrs, openaiBody;
@@ -6339,7 +6724,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             hdrs = { "Content-Type": "application/json" };
             // Cloud tier needs auth headers
             if (tier === "cloud-only") {
-              const key = SETTINGS.cloudApiKey; // gateway-issued creds only — portal session tokens 401 here
+              const key = cloudToken(); // gateway-issued creds only — portal session tokens 401 here
               if (key) {
                 hdrs["Authorization"] = `Bearer ${key}`;
                 hdrs["X-API-Key"] = key;
@@ -6622,9 +7007,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const pq = (message.query || "").trim();
       if (pq && SEARCH_URL) {
         const prewarmHeaders = { "Content-Type": "application/json" };
-        if (DETECTED_TIER === "cloud-only" && SETTINGS.cloudApiKey) {
-          prewarmHeaders["Authorization"] = `Bearer ${SETTINGS.cloudApiKey}`;
-          prewarmHeaders["X-API-Key"] = SETTINGS.cloudApiKey;
+        if (DETECTED_TIER === "cloud-only" && cloudToken()) {
+          prewarmHeaders["Authorization"] = `Bearer ${cloudToken()}`;
+          prewarmHeaders["X-API-Key"] = cloudToken();
         }
         fetch(`${SEARCH_URL}/search/fast`, {
           method: "POST",
@@ -7297,7 +7682,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (!result.ok) throw new Error(result.error);
             tools = mapTools(result.data.tools || result.data);
           } else if (tier === "cloud-only") {
-            const key = SETTINGS.cloudApiKey; // gateway-issued creds only — portal session tokens 401 here
+            const key = cloudToken(); // gateway-issued creds only — portal session tokens 401 here
             const hdrs = { "Content-Type": "application/json" };
             if (key) { hdrs["Authorization"] = `Bearer ${key}`; hdrs["X-API-Key"] = key; }
             const result = await fetchJson(
@@ -7345,7 +7730,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const nodeBase = TIER_URLS.nodeUrl || `http://${LOOPBACK}:${SETTINGS.nodePort || 8090}`;
           url = `${nodeBase}/proxy/marketplace/v1/marketplace/unified/browse?${qs}`;
         } else if (tier === "cloud-only") {
-          const key = SETTINGS.cloudApiKey;
+          const key = cloudToken();
           if (key) { hdrs["Authorization"] = `Bearer ${key}`; hdrs["X-API-Key"] = key; }
           url = `${(SETTINGS.cloudGatewayUrl || "https://gateway.aitherium.com").replace(/\/+$/, "")}/v1/marketplace/unified/browse?${qs}`;
         } else {
@@ -7450,7 +7835,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
           } else if (tier === "cloud-only") {
             // Cloud: POST /v1/mcp/call with auth
-            const key = SETTINGS.cloudApiKey; // gateway-issued creds only — portal session tokens 401 here
+            const key = cloudToken(); // gateway-issued creds only — portal session tokens 401 here
             const hdrs = { "Content-Type": "application/json" };
             if (key) { hdrs["Authorization"] = `Bearer ${key}`; hdrs["X-API-Key"] = key; }
             const resp = await fetch(`${TIER_URLS.nodeUrl}/v1/mcp/call`, {
@@ -7498,6 +7883,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         connected: isConnected,
         status: aitherOSStatus,
         tier: DETECTED_TIER,
+        capabilities: tierChangedMessage().capabilities,
+        provider: DETECTED_TIER === "provider" ? (PROVIDER_CFG?.id || null) : null,
+        localSurfaces: LOCAL_SURFACES,
         relayConnected,
         relayNick,
         connectedApps: Array.from(connectedApps.entries()),
@@ -7590,7 +7978,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ ok: true, message: "AitherOS overlay opened on the Windows desktop (awdesk)" });
             return;
           }
-          sendResponse({ ok: false, error: `awdesk answered HTTP ${resp.status}` });
+          sendResponse({ ok: false, error: resp.status === 403 ? self.DeskBridge.TOO_OLD : `awdesk answered HTTP ${resp.status}` });
         } catch {
           sendResponse({ ok: false, error: "awdesk is not running on this machine (start Desk, or `desk-start --overlay`)" });
         }
@@ -7942,7 +8330,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             autoHarvest: SETTINGS.autoHarvest,
             workspaceKnowledge: SETTINGS.workspaceKnowledge,
           },
-          authed: !!(SETTINGS.userId || SETTINGS.cloudApiKey || SETTINGS.apiKey),
+          authed: !!(SETTINGS.userId || cloudToken() || SETTINGS.apiKey),
           scopes,
           wsConnected: isConnected,
           relayConnected,
@@ -8179,6 +8567,91 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     // ── Connection Settings ─────────────────────────────────────────
+    // ── Signed-in plane: workspace, backend, first chat (AWC-B4) ─────────
+    case "awc-workspace-state":
+      (async () => {
+        const st = message.refresh || !WS_PLANE
+          ? await refreshWorkspacePlane({ force: !!message.force })
+          : WS_PLANE;
+        sendResponse(st);
+      })();
+      return true;
+
+    case "awc-select-workspace":
+      (async () => {
+        const P = self.AitherWorkspacePlane;
+        const list = (WS_PLANE && WS_PLANE.workspaces) || [];
+        const ws = list.find((w) => P.wsId(w) === message.id);
+        if (!ws) { sendResponse({ ok: false, error: "not one of your workspaces" }); return; }
+        await P.persistWorkspace(ws);
+        await saveSettings({ ...SETTINGS, workspaceId: P.wsId(ws) });
+        sendResponse(await refreshWorkspacePlane());
+      })();
+      return true;
+
+    case "awc-backends":
+      (async () => {
+        const P = self.AitherWorkspacePlane;
+        const probe = async (url) => {
+          try { return (await fetch(url, { signal: AbortSignal.timeout(2500) })).ok; } catch { return false; }
+        };
+        const le = self.AitherLocalEndpoints;
+        const adkBase = (le && (await le.endpointFor("adk"))) || `http://${LOOPBACK}:9001`;
+        const nodeBase = `http://${LOOPBACK}:${SETTINGS.nodePort || 8090}`;
+        const [adk, awnode] = await Promise.all([probe(`${adkBase}/health`), probe(`${nodeBase}/health`)]);
+        const auth = await P.readAuth();
+        const signedIn = !!(auth && (auth.user_bearer || auth.gateway_key));
+        const workspaceId = SETTINGS.workspaceId || "";
+        const localAgents = adk ? await P.listLocalAgents({ adkBase }) : [];
+        sendResponse({
+          ok: true, adkBase, nodeBase,
+          backends: P.wizardBackends({ adk, awnode, signedIn, workspaceId }),
+          localAgents,
+          preferredTier: SETTINGS.preferredTier || "auto",
+        });
+      })();
+      return true;
+
+    case "awc-set-backend":
+      (async () => {
+        const tier = self.AitherWorkspacePlane.preferredTierFor(message.backend);
+        await saveSettings({ ...SETTINGS, preferredTier: tier });
+        await autoDetectTier();
+        sendResponse({ ok: true, preferredTier: tier, tier: DETECTED_TIER });
+      })();
+      return true;
+
+    case "awc-first-chat":
+      (async () => {
+        const P = self.AitherWorkspacePlane;
+        const prompt = String(message.prompt || "Say hello in one short sentence.");
+        try {
+          let req;
+          if (message.backend === "local-agent" || message.backend === "local-model") {
+            const le = self.AitherLocalEndpoints;
+            const base = message.backend === "local-agent"
+              ? ((le && (await le.endpointFor("adk"))) || `http://${LOOPBACK}:9001`)
+              : `http://${LOOPBACK}:${SETTINGS.nodePort || 8090}`;
+            req = P.localChatRequest({ adkBase: base, agent: message.agent || null, message: prompt });
+          } else {
+            await loadCloudCredential();
+            const cred = cloudToken();
+            if (!cred) { sendResponse({ ok: false, error: "not signed in" }); return; }
+            req = P.cloudChatRequest({
+              credential: cred, workspaceId: SETTINGS.workspaceId || "",
+              messages: [{ role: "user", content: prompt }], model: message.agent || undefined,
+            });
+          }
+          const resp = await fetch(req.url, { ...req.init, signal: AbortSignal.timeout(120000) });
+          if (!resp.ok) { sendResponse({ ok: false, status: resp.status, error: `HTTP ${resp.status}` }); return; }
+          const reply = P.replyText(await resp.json());
+          sendResponse(reply ? { ok: true, reply } : { ok: false, error: "empty reply" });
+        } catch (e) {
+          sendResponse({ ok: false, error: e.message });
+        }
+      })();
+      return true;
+
     case "get-settings":
       (async () => {
         let licenseTier = "free";
@@ -8198,26 +8671,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })();
       return true;
 
-    case "get-harness-token":
-      // Sidepanel or other clients request the cached harness token.
-      // Used by sidepanel.js to make authenticated daemon calls.
-      (async () => {
-        const token = await self.HarnessAuth.readHarnessToken();
-        sendResponse({ token: token || null });
-      })();
-      return true;
-
     case "list-decisions":
-      // Popup/sidepanel requests open decision cards from Genesis.
+      // Popup/sidepanel: open decision cards from awsh (the canonical store),
+      // through the paired scoped token. Never Genesis.
       (async () => {
         try {
-          if (!self.GenesisAuth) {
-            sendResponse({ ok: false, error: "GenesisAuth not available" });
+          if (!(await self.HarnessAuth.isPaired())) {
+            sendResponse({ ok: false, needsPair: true, error: "Pair awconnect with awsh first" });
             return;
           }
-          const decisions = await self.GenesisAuth.listDecisions('open');
+          const decisions = await self.HarnessAuth.listDecisions("open");
           if (!decisions) {
-            sendResponse({ ok: false, error: "Failed to fetch decisions" });
+            sendResponse({ ok: false, error: "awsh did not return decisions" });
             return;
           }
           sendResponse({ ok: true, decisions });
@@ -8228,20 +8693,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case "answer-decision":
-      // Popup/sidepanel submits an answer to a decision card.
       (async () => {
         try {
-          if (!self.GenesisAuth) {
-            sendResponse({ ok: false, error: "GenesisAuth not available" });
-            return;
-          }
-          const result = await self.GenesisAuth.answerDecision(
+          const result = await self.HarnessAuth.answerDecision(
             message.cardId,
             message.choice,
             message.note || "",
             message.via || "awconnect"
           );
-          if (!result || result.status === 'error') {
+          if (!result || result.status === "error") {
             sendResponse({ ok: false, error: result?.error || "Failed to answer" });
             return;
           }
@@ -8249,6 +8709,52 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } catch (e) {
           sendResponse({ ok: false, error: String(e.message || e) });
         }
+      })();
+      return true;
+
+    // awdesk two-way: the side panel's "Say on desk" / "Send page to desk"
+    // buttons and the opt-in "speak replies on the desk".
+    case "desk-speak":
+      (async () => {
+        if (message.auto && !SETTINGS.deskSpeakReplies) {
+          sendResponse({ ok: false, skipped: true });
+          return;
+        }
+        sendResponse(await self.DeskBridge.speak(message.text || ""));
+      })();
+      return true;
+
+    case "desk-send-page":
+      (async () => {
+        try {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          let selection = "";
+          if (tab?.id && /^https?:/i.test(tab.url || "")) {
+            try {
+              const [res] = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: () => String(window.getSelection() || "").slice(0, 4000),
+              });
+              selection = res?.result || "";
+            } catch { /* a page that refuses scripting still sends url + title */ }
+          }
+          sendResponse(await self.DeskBridge.sendPage({ url: tab?.url, title: tab?.title, selection }));
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e.message || e) });
+        }
+      })();
+      return true;
+
+    case "desk-react":
+      (async () => sendResponse(await self.DeskBridge.react(message.emotion || message.animation)))();
+      return true;
+
+    case "pair-harness":
+      // Start (or join) the awsh pairing flow; progress is broadcast as
+      // "harness-pair-state" so the popup and sidepanel can show the code.
+      (async () => {
+        const result = await self.HarnessAuth.pair();
+        sendResponse(result);
       })();
       return true;
 
@@ -9837,9 +10343,9 @@ async function performFederatedSearch(query, options = {}) {
     (async () => {
       try {
         const fastHeaders = { "Content-Type": "application/json" };
-        if (DETECTED_TIER === "cloud-only" && SETTINGS.cloudApiKey) {
-          fastHeaders["Authorization"] = `Bearer ${SETTINGS.cloudApiKey}`;
-          fastHeaders["X-API-Key"] = SETTINGS.cloudApiKey;
+        if (DETECTED_TIER === "cloud-only" && cloudToken()) {
+          fastHeaders["Authorization"] = `Bearer ${cloudToken()}`;
+          fastHeaders["X-API-Key"] = cloudToken();
         }
         const resp = await fetch(`${SEARCH_URL}/search/fast`, {
           method: "POST",
@@ -9877,9 +10383,9 @@ async function performFederatedSearch(query, options = {}) {
     // proxies to genesis→AitherSearch), so send the cloud key; local/node tiers
     // reach search through the trusted bridge/proxy and need no bearer.
     const searchHeaders = { "Content-Type": "application/json" };
-    if (DETECTED_TIER === "cloud-only" && SETTINGS.cloudApiKey) {
-      searchHeaders["Authorization"] = `Bearer ${SETTINGS.cloudApiKey}`;
-      searchHeaders["X-API-Key"] = SETTINGS.cloudApiKey;
+    if (DETECTED_TIER === "cloud-only" && cloudToken()) {
+      searchHeaders["Authorization"] = `Bearer ${cloudToken()}`;
+      searchHeaders["X-API-Key"] = cloudToken();
     }
     const rawResp = await fetchSearchWithRetry(fetchUrl, {
       method: "POST",
@@ -10260,7 +10766,9 @@ async function fleetKnowledgeIngest({ content, source, title, tags, collection, 
     await loadSettings();
     await loadProviderConfig();
     await loadFormbridgeConfig();
+    await loadCloudCredential();
     await autoDetectTier();
+    refreshWorkspacePlane().catch(() => {});
     await syncRegisteredContentScripts();
     if (formbridgeQueue.length) await formbridgeDrainQueue();
 

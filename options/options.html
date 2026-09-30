@@ -276,6 +276,7 @@
       <label>Link to aitherium.com</label>
       <div class="hint">One sign-in: approve a code on aitherium.com. The platform owner gets the full endpoint and vault map; everyone else gets their own workspace, relay and sync.</div>
       <button class="btn" id="btn-link" style="margin-top:6px;font-size:12px;">🔗 Link this browser</button>
+      <button class="btn" id="btn-first-run" style="margin-top:6px;font-size:12px;">Set up workspace &amp; backend</button>
       <div id="link-status" style="margin-top:6px;font-size:12px;font-family:var(--font-mono);"></div>
     </div>
 
@@ -578,6 +579,17 @@
       </div>
       <label class="toggle-switch">
         <input type="checkbox" id="osOverlayEnabled" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Speak replies on the desk avatar</div>
+        <div class="toggle-hint">Off by default. When awdesk is running, the desk avatar says each assistant reply aloud.</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="deskSpeakReplies" />
         <span class="slider"></span>
       </label>
     </div>

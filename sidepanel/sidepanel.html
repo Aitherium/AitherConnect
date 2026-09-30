@@ -176,6 +176,13 @@
     .topbar-context.tier-node { color: var(--warning); border-color: rgba(245,158,11,0.3); }
     .topbar-context.tier-cloud { color: var(--accent); border-color: rgba(34,211,238,0.3); }
     .topbar-context.tier-offline { color: var(--text-muted); border-color: var(--border); }
+    .topbar-context.tier-local { color: var(--success); border-color: rgba(16,185,129,0.3); }
+    .greeting-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .greeting-actions button { font-size: 11px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary, inherit); cursor: pointer; }
+    .local-surfaces { display: flex; flex-wrap: wrap; gap: 6px; font-family: var(--font-mono); font-size: 11px; }
+    .local-surface { padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); }
+    .local-surface.up { color: var(--success); border-color: rgba(16,185,129,0.3); }
+    .local-surface.down { color: var(--text-muted); }
     .topbar-spacer { flex: 1; }
 
     .topbar-btn {
@@ -2168,6 +2175,8 @@
     <div class="topbar-status" id="status-dot" title="Disconnected"></div>
     <span class="topbar-context" id="tier-badge" title="Detecting tier..." style="cursor:pointer;">detecting...</span>
     <span class="topbar-context" id="workspace-badge" title="No workspace configured"></span>
+    <select class="topbar-context" style="display:none" id="workspace-picker" title="Pick a workspace" aria-label="Pick a workspace"></select>
+    <select class="topbar-context" style="display:none" id="agent-picker" title="Chat with" aria-label="Chat with"></select>
     <div class="topbar-spacer"></div>
     <button class="topbar-btn" id="btn-veil" title="Open AitherVeil Dashboard">🖥️ Veil</button>
     <button class="topbar-btn" id="btn-desktop" title="Launch AitherDesktop">🪟</button>
@@ -2200,7 +2209,9 @@
   <!-- Chat Panel -->
   <div class="panel active" id="panel-chat">
     <div class="chat-messages" id="chat-messages">
-      <div class="chat-msg system">Connected to AitherOS. Ask me anything.</div>
+      <!-- Rendered from the detected tier (sidepanel.js renderGreeting). Never a
+           static "connected" line: that was shown to people with nothing running. -->
+      <div class="chat-msg system" id="chat-greeting">Checking your connection…</div>
     </div>
     <div class="themis-scan-bar">
       <button class="themis-scan-btn" id="themis-scan-btn" title="Scan current page for dark patterns, hidden fees, privacy issues">
@@ -2629,6 +2640,12 @@
         <div id="setup-connection-status" style="display:flex; flex-direction:column; gap:6px; font-family:var(--font-mono); font-size:11px;"></div>
       </div>
 
+      <!-- Local surfaces: capability sources on this machine, NOT chat tiers -->
+      <div style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius); padding:12px;">
+        <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--accent); margin-bottom:10px;">Local surfaces</div>
+        <div id="local-surfaces" class="local-surfaces">checking…</div>
+      </div>
+
       <!-- Local Services -->
       <div style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:var(--radius); padding:12px;">
         <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--accent); margin-bottom:10px;">Local Services</div>
@@ -2657,6 +2674,12 @@
 
   <!-- Decisions Panel -->
   <div class="panel" id="panel-decisions">
+    <div class="desk-actions" id="desk-actions" style="display:flex;gap:6px;margin-bottom:8px;">
+      <button class="decision-option-btn" id="desk-send-page-btn" title="Push this page (and any selected text) into awdesk as context">Send page to desk</button>
+      <button class="decision-option-btn" id="desk-say-btn" title="The desk avatar says the selected text">Say on desk</button>
+    </div>
+    <div class="decisions-empty" id="desk-actions-status" style="display:none"></div>
+    <div class="decisions-pairing" id="decisions-pairing" style="display:none"></div>
     <div class="goals-header">Goals</div>
     <div class="goals-container" id="goals-container">
       <div class="decisions-empty">No active goals.</div>
@@ -2728,7 +2751,9 @@
   <!-- Generated vocabulary — MUST load before room-tab.js -->
   <script src="../shared/product-catalog.js?v=20260927a"></script>
   <script src="aither-events.generated.js?v=20260810a"></script>
-  <script src="sidepanel.js?v=20260429c"></script>
+  <script src="../shared/tier-detect.js?v=20260927a"></script>
+  <script src="../shared/harness-auth.js?v=20260927b"></script>
+  <script src="sidepanel.js?v=20260928a"></script>
   <script src="shell-tab.js?v=20260601a"></script>
 <script src="vault-tab.js?v=20260731a"></script>
 <script src="lockbox-tab.js?v=20260802a"></script>

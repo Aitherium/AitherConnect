@@ -663,14 +663,18 @@
     try {
       // Ask the background worker which does multi-endpoint checks
       const resp = await chrome.runtime.sendMessage({ type: 'get-status' });
-      if (resp?.tier) updateTierBadge(resp.tier);
+      if (resp?.tier) {
+        updateTierBadge(resp.tier, resp.provider || null);
+        if (resp.localSurfaces) renderLocalSurfaces(resp.localSurfaces);
+        renderGreeting(resp.tier, resp.capabilities || {}, resp.localSurfaces || null, resp.provider || null);
+      }
       if (resp && (resp.status === 'online' || resp.status === 'degraded' || resp.connected)) {
         state.connected = true;
         statusDot.className = "topbar-status connected";
-        const tierLabel = resp.tier ? ` [${TIER_LABELS[resp.tier] || resp.tier}]` : "";
+        const tierLabel = resp.tier ? (TIER_LABELS[resp.tier] || resp.tier) : "unknown";
         statusDot.title = resp.status === 'degraded'
-          ? `AitherOS (degraded${tierLabel})`
-          : `Connected to AitherOS${tierLabel}`;
+          ? `${tierLabel} (degraded)`
+          : `Online: ${tierLabel}`;
         addEvent("CONN", `AitherOS ${resp.status} (${resp.tier || "unknown"})`);
         return true;
       }
@@ -687,7 +691,7 @@
         if (resp.ok) {
           state.connected = true;
           statusDot.className = "topbar-status connected";
-          statusDot.title = "Connected to AitherOS (via fallback)";
+          statusDot.title = "Fleet reachable (via fallback)";
           addEvent("CONN", "Connected via fallback service");
           return true;
         }
@@ -704,14 +708,19 @@
   // TIER BADGE
   // ====================================================================
 
-  const TIER_LABELS = {
-    genesis: "Full AitherOS",
-    "node-only": "Node-Only",
+  // Honest labels, one source of truth (shared/tier-detect.js).
+  const TIER_LABELS = (typeof TierDetect !== "undefined" && TierDetect.TIER_LABELS) || {
+    genesis: "Fleet",
+    "local-agent": "Local agent",
+    "node-only": "awnode",
     "cloud-only": "Cloud",
+    provider: "BYOK",
     offline: "Offline",
     unknown: "Detecting...",
   };
   const TIER_CLASSES = {
+    "local-agent": "tier-local",
+    provider: "tier-cloud",
     genesis: "tier-genesis",
     "node-only": "tier-node",
     "cloud-only": "tier-cloud",
@@ -719,11 +728,58 @@
     unknown: "",
   };
 
+  // ====================================================================
+  // CHAT GREETING + LOCAL SURFACES (rendered from the detected tier)
+  // ====================================================================
+
+  let _lastSurfaces = null;
+
+  function renderGreeting(tier, caps = {}, surfaces = null, provider = null) {
+    const el = $("chat-greeting");
+    if (!el) return;
+    const snap = surfaces || _lastSurfaces;
+    const text = (typeof TierDetect !== "undefined")
+      ? TierDetect.greetingFor(tier, caps, snap, provider)
+      : (tier === "offline" ? "Offline. No backend." : "Detecting a backend...");
+    el.textContent = text;
+    if (tier !== "offline") return;
+    const actions = document.createElement("div");
+    actions.className = "greeting-actions";
+    const add = (label, onClick) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.addEventListener("click", onClick);
+      actions.appendChild(b);
+    };
+    add("Sign in", () => chrome.tabs.create({ url: chrome.runtime.getURL("onboard/onboard.html") }));
+    add("How to start awdk", () => chrome.tabs.create({ url: "https://github.com/Aitherium/awdk#readme" }));
+    add("Add a key", () => chrome.runtime.openOptionsPage());
+    el.appendChild(actions);
+  }
+
+  function renderLocalSurfaces(surfaces) {
+    if (!surfaces || typeof surfaces !== "object") return;
+    _lastSurfaces = surfaces;
+    const el = $("local-surfaces");
+    if (!el) return;
+    el.textContent = "";
+    const names = (typeof TierDetect !== "undefined" && TierDetect.SURFACE_LABELS) || {};
+    for (const key of Object.keys(surfaces)) {
+      const s = surfaces[key] || {};
+      const chip = document.createElement("span");
+      chip.className = `local-surface ${s.up ? "up" : "down"}`;
+      chip.textContent = `${names[key] || key} ${s.up ? "up" : "down"}`;
+      chip.title = `${s.url || "no endpoint"}${s.version ? ` (v${s.version})` : ""}`;
+      el.appendChild(chip);
+    }
+  }
+
   function updateTierBadge(tier, provider = null) {
     if (!tierBadge) return;
     // If tier is 'provider', use the provider name in label
     let label = tier === "provider" && provider
-      ? `${provider} (BYOK)`
+      ? `BYOK (${provider})`
       : TIER_LABELS[tier] || tier;
     tierBadge.textContent = label;
     tierBadge.className = `topbar-context ${TIER_CLASSES[tier] || ""}`;
@@ -992,7 +1048,73 @@
   // WORKSPACE / TENANT / ENDPOINT STATUS
   // ====================================================================
 
+  // The greeting states what is actually connected; the old static
+  // "Connected to AitherOS" showed beside an Offline badge.
+  function setGreeting(plane) {
+    const g = $("chat-greeting");
+    if (!g) return;
+    const b = plane && plane.badge;
+    if (b && b.state === "ok") g.textContent = `Signed in — ${b.text}. Ask me anything.`;
+    else if (b && b.state === "pick") g.textContent = "Pick a workspace above to start.";
+    else if (b && b.state === "no-workspace") g.textContent = "You have no workspace yet — create one at aitherium.com, or chat with a local agent.";
+    else if (b && b.state === "unreachable") g.textContent = `Aitherium cloud is unreachable right now (${b.text}). Local agents still work.`;
+    else g.textContent = "Not signed in. Open Setup to sign in, or chat with a local agent.";
+  }
+
+  // Signed-in plane (background refreshWorkspacePlane): badge with an honest
+  // reason, a picker when there are several workspaces, and the agent picker.
+  async function loadWorkspacePlane() {
+    let plane = null;
+    try { plane = await chrome.runtime.sendMessage({ type: "awc-workspace-state" }); } catch { return null; }
+    if (!plane || !plane.ok || !plane.badge) return null;
+    const b = plane.badge;
+    workspaceBadge.textContent = b.text;
+    workspaceBadge.className = b.state === "ok" ? "topbar-context active" : "topbar-context";
+    workspaceBadge.title = b.href ? `Open ${b.href}` : b.text;
+    workspaceBadge.onclick = b.href ? () => chrome.tabs.create({ url: b.href }) : null;
+    workspaceBadge.style.cursor = b.href ? "pointer" : "";
+    const picker = $("workspace-picker");
+    if (picker) {
+      const list = plane.workspaces || [];
+      if (list.length > 1) {
+        picker.innerHTML = "";
+        const ph = document.createElement("option");
+        ph.value = ""; ph.textContent = "workspace…"; picker.appendChild(ph);
+        for (const w of list) {
+          const o = document.createElement("option");
+          o.value = w.id || w.workspace_id || w.slug;
+          o.textContent = w.name || w.display_name || w.slug || o.value;
+          picker.appendChild(o);
+        }
+        picker.value = (plane.selection && (plane.selection.id || "")) || "";
+        picker.style.display = "";
+        picker.onchange = async () => {
+          if (!picker.value) return;
+          await chrome.runtime.sendMessage({ type: "awc-select-workspace", id: picker.value });
+          await loadWorkspaceContext();
+        };
+      } else {
+        picker.style.display = "none";
+      }
+    }
+    const ap = $("agent-picker");
+    if (ap) {
+      const agents = plane.agents || [];
+      ap.innerHTML = "";
+      for (const a of agents) {
+        const o = document.createElement("option");
+        o.value = a.id; o.textContent = a.name; ap.appendChild(o);
+      }
+      ap.style.display = agents.length ? "" : "none";
+    }
+    setGreeting(plane);
+    return plane;
+  }
+
   async function loadWorkspaceContext() {
+    const plane = await loadWorkspacePlane();
+    if (plane && plane.badge && plane.badge.state !== "signed-out") return;
+    if (!plane) setGreeting(null);
     try {
       const resp = await chrome.runtime.sendMessage({ type: "get-settings" });
       const s = resp?.settings || {};
@@ -1018,9 +1140,9 @@
           : `User: ${s.userId}
 Scope: platform (no workspace selected)`;
       } else {
-        workspaceBadge.textContent = "no workspace";
+        workspaceBadge.textContent = "not signed in";
         workspaceBadge.className = "topbar-context";
-        workspaceBadge.title = "Run `adk login` on this computer, or sign in from Options";
+        workspaceBadge.title = "Sign in from the Setup tab, or run `adk login` on this computer";
       }
     } catch { /* settings not available */ }
   }
@@ -1032,6 +1154,8 @@ Scope: platform (no workspace selected)`;
   // flaps LyraWiki UP→DOWN→UP. A single success clears the strike immediately.
   const _svcState = {}; // name -> { status: "up"|"down"|"error", fails: n }
   const _SVC_DOWN_STRIKES = 2;
+
+  loadWorkspaceContext();
 
   async function checkEndpointStatus() {
     const endpoints = [
@@ -1195,7 +1319,10 @@ Scope: platform (no workspace selected)`;
     if (_streamingMsgEl) return;
 
     // Parse @agent routing (e.g. "@hydra review this code")
-    let agentTarget = null;
+    // The agent picker (managed agents from the workspace/bundle) is the
+    // default target; an explicit @mention below still wins.
+    const _ap = $("agent-picker");
+    let agentTarget = _ap && _ap.style.display !== "none" && _ap.value ? _ap.value : null;
     let cleanMessage = message;
     const agentMatch = message.match(/^@(\w+)\s+([\s\S]+)/);
     if (agentMatch) {
@@ -1419,6 +1546,11 @@ Scope: platform (no workspace selected)`;
   }
 
   function appendMsg(role, content, rawHtml = false, citations = []) {
+    // Opt-in (Settings: deskSpeakReplies, default off): the desk avatar speaks
+    // the reply. The service worker checks the setting; this only offers it.
+    if (role === "assistant" && !rawHtml && typeof content === "string" && content.trim()) {
+      chrome.runtime.sendMessage({ type: "desk-speak", text: content, auto: true }).catch(() => {});
+    }
     const div = document.createElement("div");
     div.className = `chat-msg ${role} fade-in`;
 
@@ -3045,6 +3177,8 @@ Scope: platform (no workspace selected)`;
       state.tier = msg.tier;
       state.provider = msg.provider || null;
       updateTierBadge(msg.tier, msg.provider);
+      if (msg.localSurfaces) renderLocalSurfaces(msg.localSurfaces);
+      renderGreeting(msg.tier, msg.capabilities || {}, msg.localSurfaces || null, msg.provider || null);
 
       // Apply capabilities based on tier
       const capabilities = msg.capabilities || {};
@@ -3054,7 +3188,7 @@ Scope: platform (no workspace selected)`;
       state.connected = msg.tier !== "offline" && msg.tier !== "unknown";
       if (state.connected) {
         statusDot.className = "topbar-status connected";
-        statusDot.title = `Connected (${TIER_LABELS[msg.tier] || msg.tier})`;
+        statusDot.title = `Online: ${TIER_LABELS[msg.tier] || msg.tier}`;
       } else {
         statusDot.className = "topbar-status";
         statusDot.title = "Disconnected";
@@ -3062,11 +3196,17 @@ Scope: platform (no workspace selected)`;
       addEvent("TIER", `Switched to ${TIER_LABELS[msg.tier] || msg.tier}`);
     }
 
+    if (msg.type === "local-surfaces") {
+      renderLocalSurfaces(msg.surfaces);
+      // The offline greeting lists what was probed; refresh it with the news.
+      if (state.tier === "offline") renderGreeting("offline", {}, msg.surfaces, null);
+    }
+
     if (msg.type === "health-update") {
       if (msg.status === "online" || msg.healthy) {
         state.connected = true;
         statusDot.className = "topbar-status connected";
-        statusDot.title = "Connected to AitherOS";
+        statusDot.title = `Online: ${TIER_LABELS[state.tier] || state.tier || "detecting"}`;
       } else if (msg.status === "degraded") {
         state.connected = true;
         statusDot.className = "topbar-status connected";
@@ -5559,17 +5699,71 @@ ${res.error}
   // DECISIONS PANEL — pending decisions from the harness daemon
   // ========================================================================
 
+  // Pairing with awsh: the first use of the Decisions panel shows the code the
+  // owner approves on the desk. The flow itself runs in the service worker
+  // ("pair-harness"), so the popup and this panel share ONE pairing and ONE card.
+  function renderPairing(st) {
+    const box = $("decisions-pairing");
+    if (!box || !self.HarnessAuth) return;
+    const view = self.HarnessAuth.describeState(st);
+    if (st?.phase === "paired") {
+      box.style.display = "none";
+      return;
+    }
+    box.style.display = "";
+    box.innerHTML = "";
+    const text = document.createElement("div");
+    text.className = "decisions-empty";
+    text.textContent = view.text;
+    box.appendChild(text);
+    if (view.code) {
+      const code = document.createElement("div");
+      code.className = "decision-card-title";
+      code.style.cssText = "font-size:22px;letter-spacing:4px;text-align:center;margin:6px 0;";
+      code.textContent = view.code;
+      box.appendChild(code);
+    }
+    if (view.action === "pair") {
+      const btn = document.createElement("button");
+      btn.className = "decision-option-btn";
+      btn.textContent = view.label || "Pair with desk";
+      btn.addEventListener("click", () => startPairing());
+      box.appendChild(btn);
+    }
+  }
+
+  async function startPairing() {
+    renderPairing({ phase: "starting" });
+    const result = await chrome.runtime.sendMessage({ type: "pair-harness" }).catch(() => null);
+    if (result?.ok) {
+      renderPairing({ phase: "paired" });
+      await loadDecisionsPanel();
+    }
+  }
+
   async function loadDecisionsPanel() {
     if (!self.HarnessAuth) return;
     const container = $("decisions-container");
     if (!container) return;
 
+    if (!(await self.HarnessAuth.isPaired())) {
+      container.innerHTML = "";
+      renderPairing({ phase: "unpaired" });
+      return;
+    }
+    renderPairing({ phase: "paired" });
     container.innerHTML = '<div class="decisions-loading">Loading decisions...</div>';
 
     try {
       const result = await self.HarnessAuth.listDecisions("open");
+      if (!(await self.HarnessAuth.isPaired())) {
+        // awsh refused the token (revoked, or the daemon was reset): pair again.
+        container.innerHTML = "";
+        renderPairing({ phase: "unpaired" });
+        return;
+      }
       if (!result || !result.decisions) {
-        container.innerHTML = '<div class="decisions-empty">No pending decisions.</div>';
+        container.innerHTML = '<div class="decisions-empty">awsh did not answer. Is the harness daemon running?</div>';
         return;
       }
 
@@ -5658,8 +5852,42 @@ ${res.error}
     }
   }
 
+  // awdesk two-way: push this page into the desk, or have the avatar say the
+  // selection. Both run in the service worker (it owns the tab + scripting).
+  function deskStatus(text) {
+    const el = $("desk-actions-status");
+    if (!el) return;
+    el.textContent = text;
+    el.style.display = text ? "" : "none";
+  }
+  $("desk-send-page-btn")?.addEventListener("click", async () => {
+    const r = await chrome.runtime.sendMessage({ type: "desk-send-page" }).catch(() => null);
+    deskStatus(r?.ok ? "Sent to the desk." : (r?.error || "awdesk did not answer"));
+  });
+  $("desk-say-btn")?.addEventListener("click", async () => {
+    let text = "";
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => String(window.getSelection() || "").slice(0, 2000),
+      });
+      text = res?.result || "";
+    } catch { /* no selection readable on this page */ }
+    if (!text) {
+      deskStatus("Select some text on the page first.");
+      return;
+    }
+    const r = await chrome.runtime.sendMessage({ type: "desk-speak", text }).catch(() => null);
+    deskStatus(r?.ok ? "The desk is saying it." : (r?.error || "awdesk did not answer"));
+  });
+
   // Listen for decision count updates from background.js
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === "harness-pair-state") {
+      renderPairing(message.state);
+      return;
+    }
     if (message.type === "decisions-count-update") {
       if ($("nav-tabs").querySelector('[data-panel="decisions"].active')) {
         loadDecisionsPanel().catch(() => {});

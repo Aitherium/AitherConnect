@@ -1715,6 +1715,136 @@ test('options: no await before chrome API in gesture handlers', () => {
 });
 
 // ============================================================================
+// LOCAL-AGENT TIER (awdk :9001) + honest status
+// ============================================================================
+section(`\n${colors.blue}Local-agent tier + honest status${colors.reset}`);
+
+/**
+ * Stub fetch by PORT: `up` maps a port to the JSON body its /health answers.
+ * Every other URL refuses, like a closed port does.
+ */
+async function withPorts(up, fn) {
+  const origFetch = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    seen.push(u);
+    const m = u.match(/^http:\/\/127\.0\.0\.1:(\d+)\//);
+    if (m && Object.prototype.hasOwnProperty.call(up, m[1])) {
+      const body = up[m[1]];
+      return { ok: true, status: 200, json: async () => body };
+    }
+    throw new Error('ECONNREFUSED (stubbed)');
+  };
+  try {
+    return { result: await fn(), seen };
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+}
+
+const ADK_HEALTH = {
+  status: 'healthy', agent: 'aither', version: '3.8.26',
+  tools: { mode: 'builtin-only', registered: 7, catalogue: 0 },
+};
+
+test('local-agent: ONLY awdk :9001 up => tier local-agent with its tools and version', async () => {
+  const { result } = await withPorts({ 9001: ADK_HEALTH }, () => TierDetect.detect({}, '', '', null));
+  assert.strictEqual(result.tier, 'local-agent');
+  assert.strictEqual(result.chatUrl, 'http://127.0.0.1:9001');
+  assert.strictEqual(result.chatShape, 'adk-sse');
+  assert.strictEqual(result.capabilities.hasChat, true);
+  assert.strictEqual(result.capabilities.toolCount, 7);
+  assert.strictEqual(result.capabilities.tools, 'builtin-only');
+  assert.strictEqual(result.capabilities.version, '3.8.26');
+});
+
+test('local-agent: EVERYTHING down => offline (and awdk was actually probed)', async () => {
+  const { result, seen } = await withPorts({}, () => TierDetect.detect({}, '', '', null));
+  assert.strictEqual(result.tier, 'offline');
+  assert(seen.some((u) => u === 'http://127.0.0.1:9001/health'), 'the awdk /health must be probed');
+});
+
+test('local-agent: Genesis :8001 AND awdk :9001 up => genesis wins', async () => {
+  const { result } = await withPorts({ 8001: { status: 'healthy' }, 9001: ADK_HEALTH },
+    () => TierDetect.detect({}, '', '', null));
+  assert.strictEqual(result.tier, 'genesis');
+});
+
+test('local-agent: a 200 from :9001 that is NOT a healthy awdk is not an agent', async () => {
+  const { result } = await withPorts({ 9001: { status: 'starting' } }, () => TierDetect.detect({}, '', '', null));
+  assert.strictEqual(result.tier, 'offline');
+});
+
+test('local-agent: ranks above awnode and below the fleet', () => {
+  const R = TierDetect.TIER_RANK;
+  assert(R.genesis > R['local-agent'] && R['local-agent'] > R['node-only'],
+    `rank genesis ${R.genesis} > local-agent ${R['local-agent']} > node-only ${R['node-only']}`);
+  assert.strictEqual(TierDetect.decideTierChange('offline', 'local-agent', 0).adopt, true);
+});
+
+test('local-agent: capability preset exists and claims no fleet surface', () => {
+  const c = TierDetect.capabilitiesFor('local-agent');
+  assert.strictEqual(c.hasChat, true);
+  for (const k of ['hasFleet', 'hasShell', 'hasThemis', 'hasShield', 'hasRelay', 'hasImageGen', 'hasHeadlessBrowser']) {
+    assert.strictEqual(c[k], false, `${k} must be false for local-agent`);
+  }
+});
+
+test('local-surfaces: probes awdk, awsh, aw hub, awdesk and awnode on their own ports', async () => {
+  const { result } = await withPorts({ 9001: ADK_HEALTH, 47933: { ok: true } }, () => TierDetect.localSurfaces());
+  assert.deepStrictEqual(Object.keys(result).sort(), ['adk', 'awdesk', 'awhub', 'awnode', 'awsh']);
+  assert.strictEqual(result.adk.up, true);
+  assert.strictEqual(result.adk.version, '3.8.26');
+  assert.strictEqual(result.awhub.up, true);
+  assert.strictEqual(result.awhub.url, 'http://127.0.0.1:47933');
+  assert.strictEqual(result.awsh.up, false);
+  assert.strictEqual(result.awdesk.url, 'http://127.0.0.1:47931');
+  assert.strictEqual(result.awnode.url, 'http://127.0.0.1:8090');
+});
+
+test('greeting: local-agent names awdk, version and tool count', () => {
+  const g = TierDetect.greetingFor('local-agent', { version: '3.8.26', toolCount: 7 });
+  assert(g.startsWith('Local agent (awdk v3.8.26, 7 tools)'), g);
+});
+
+test('greeting: offline never says Connected and lists what was probed', () => {
+  const g = TierDetect.greetingFor('offline', {}, { adk: { up: false }, awsh: { up: true } });
+  assert(!/connected/i.test(g), g);
+  assert(g.includes(TierDetect.OFFLINE_CHAT_MESSAGE), g);
+  assert(g.includes('awdk down') && g.includes('awsh up'), g);
+});
+
+test('adk SSE: token/answer/error/complete map to the side panel stream', () => {
+  assert.deepStrictEqual(TierDetect.adkEventToChat('token', { type: 'token', t: 'hi' }), { kind: 'chunk', text: 'hi' });
+  assert.deepStrictEqual(TierDetect.adkEventToChat('answer', { answer: 'full' }), { kind: 'answer', text: 'full' });
+  assert.strictEqual(TierDetect.adkEventToChat('error', { error: 'x' }).kind, 'error');
+  assert.strictEqual(TierDetect.adkEventToChat('complete', {}).kind, 'complete');
+  assert.strictEqual(TierDetect.adkEventToChat('heartbeat', {}).kind, 'ignore');
+});
+
+test('sidepanel.html: no static "Connected to AitherOS" greeting; #chat-greeting exists', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'sidepanel', 'sidepanel.html'), 'utf8');
+  assert(!html.includes('Connected to AitherOS'), 'static "Connected to AitherOS" text is back in sidepanel.html');
+  assert(/id="chat-greeting"/.test(html), '#chat-greeting missing');
+  assert(/id="local-surfaces"/.test(html), '#local-surfaces strip missing');
+  assert(/src="\.\.\/shared\/tier-detect\.js/.test(html), 'sidepanel must load shared/tier-detect.js for labels + greeting');
+});
+
+test('background.js: local-agent chat posts awdk /chat/stream, offline fails fast', () => {
+  const bg = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+  assert(bg.includes('${base}/chat/stream'), 'local-agent must POST {adk}/chat/stream');
+  assert(bg.includes('${base}/v1/chat/completions'), 'local-agent must fall back to /v1/chat/completions');
+  const chat = bg.slice(bg.indexOf('case "chat":'));
+  const offlineGuard = chat.indexOf('tier === "offline"');
+  const genesisPath = chat.indexOf('`${GENESIS_URL}/agent`');
+  assert(offlineGuard > 0 && genesisPath > 0 && offlineGuard < genesisPath,
+    'offline must return before the Genesis /agent path (no dial of the dead :3000 bridge)');
+  assert(chat.slice(offlineGuard, offlineGuard + 400).includes('OFFLINE_CHAT_MESSAGE'), 'offline returns the actionable message');
+  assert(bg.includes('"local-agent"') && bg.includes('type: "local-surfaces"'), 'local-surfaces snapshot must be broadcast');
+});
+
+// ============================================================================
 // FINAL REPORT
 // ============================================================================
 

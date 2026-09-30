@@ -332,7 +332,7 @@
     </div>
     <div class="install-row">
       <div class="who">MCP gateway <span class="hint">full AitherOS fleet &middot; port 8182 (optional)</span></div>
-      <span class="status miss" id="status-awnode">checking…</span>
+      <span class="status miss" id="status-mcpgateway">checking…</span>
     </div>
 
     <div id="local-found" class="message success hidden">AitherOS is running on this computer.</div>
@@ -431,6 +431,7 @@
     <div class="actions">
       <button class="btn" id="back-from-fleet">Back</button>
       <button class="btn" id="recheck-fleet" style="margin-right:auto;">Check again</button>
+      <button class="btn" id="fleet-first-run">Choose backend &amp; test chat</button>
       <button class="btn primary" id="finish-fleet">Finish setup</button>
     </div>
   </div>
@@ -579,11 +580,46 @@
     </div>
   </div>
 
+  <!-- FIRST RUN (AWC-B4): workspace -> backend -> first chat. Shown after
+       sign-in or "use this computer only"; re-openable from Options
+       (onboard.html#first-run). Only DETECTED backends are offered. -->
+  <div class="panel hidden" id="panel-first-run">
+    <h2>Pick where your agents run</h2>
+    <div id="fr-workspace" class="hidden">
+      <div class="field">
+        <label for="fr-workspace-select">Workspace</label>
+        <select id="fr-workspace-select"></select>
+      </div>
+    </div>
+    <div id="fr-workspace-message"></div>
+    <div class="field">
+      <label>Backend</label>
+      <div id="fr-backends"></div>
+    </div>
+    <div class="field hidden" id="fr-agent-field">
+      <label for="fr-agent">Agent</label>
+      <select id="fr-agent"></select>
+    </div>
+    <div class="field">
+      <label for="fr-prompt">First message</label>
+      <input type="text" id="fr-prompt" value="Say hello in one short sentence." />
+    </div>
+    <div id="fr-reply"></div>
+    <div class="actions">
+      <button class="small-link" id="fr-advanced">Deployment mode…</button>
+      <button class="btn" id="fr-recheck" style="margin-left:auto;">Check again</button>
+      <button class="btn" id="fr-send" disabled>Send test message</button>
+      <button class="btn primary" id="fr-finish" disabled>Finish</button>
+    </div>
+  </div>
+
   <script src="../shared/providers.js"></script>
   <script src="../shared/auth-store.js"></script>
   <script src="../shared/portal-api.js"></script>
   <script src="../shared/local-endpoints.js"></script>
   <script src="../shared/onboard-flow.js"></script>
+  <script src="../shared/link-bundle.js"></script>
+  <script src="../shared/workspace-plane.js"></script>
   <script src="onboard.js"></script>
 </body>
 </html>

@@ -4,8 +4,11 @@
  * Shared utility for detecting which connectivity tier is available.
  *
  * Tiers (in priority order):
- *   1. "genesis"   — Full AitherOS via Veil bridge proxy
- *   2. "node-only" — awnode standalone (HTTP, no TLS issues)
+ *   1. "genesis"     — Full AitherOS via Veil bridge proxy (or Genesis direct)
+ *   2. "local-agent" — the awdk daemon (`adk serve`, :9001) on this machine.
+ *                      Needs no fleet, no sign-in and no key: a person who
+ *                      installed awdk has a working chat here.
+ *   3. "node-only"   — awnode standalone (HTTP, no TLS issues)
  *   3. "provider"  — BYOK: user-configured LLM provider (Anthropic/OpenAI/
  *                    OpenRouter/Ollama/Gemini), chat + local KB only
  *   4. "cloud-only"— Cloud gateway with API key
@@ -42,6 +45,16 @@ const TierDetect = {
       hasFederatedSearch: true,
       hasHeadlessBrowser: true,
     },
+    // The awdk daemon: chat (streamed, with its own tools) and the local KB.
+    // No fleet-side surfaces -- those need Genesis, and claiming them here is
+    // the "Connected" lie this tier exists to end.
+    "local-agent": {
+      hasFleet: false, hasChat: true, hasLocalKb: true, hasThemis: false,
+      hasShield: false, hasShell: false, hasRelay: false, hasImageGen: false,
+      hasDesktopLaunch: false, hasA2A: true, hasMemoryRecall: false,
+      hasFederatedSearch: false,
+      hasHeadlessBrowser: false,
+    },
     "node-only": {
       hasFleet: true, hasChat: true, hasLocalKb: true, hasThemis: false,
       hasShield: false, hasShell: false, hasRelay: false, hasImageGen: false,
@@ -72,6 +85,76 @@ const TierDetect = {
     },
   },
 
+  /** What chat says when there is no backend at all. Actionable, and never
+   *  "Connected": the old side panel greeted every user with "Connected to
+   *  AitherOS" as static HTML, including the ones with nothing running. */
+  OFFLINE_CHAT_MESSAGE:
+    "No backend: start awdk (adk serve), sign in, or add a provider key",
+
+  /** Honest badge labels. Capability sources (awsh, aw hub, awdesk) are
+   *  deliberately absent: they are shown as surfaces, not as chat tiers. */
+  TIER_LABELS: {
+    genesis: "Fleet",
+    "local-agent": "Local agent",
+    "node-only": "awnode",
+    "cloud-only": "Cloud",
+    provider: "BYOK",
+    offline: "Offline",
+    unknown: "Detecting...",
+  },
+
+  /** Human names for the local surfaces the status strip shows. */
+  SURFACE_LABELS: {
+    adk: "awdk", awsh: "awsh", awhub: "aw hub", awdesk: "awdesk", awnode: "awnode",
+  },
+
+  /**
+   * The chat greeting for a tier. Pure: the side panel renders exactly this.
+   * @param {string} tier
+   * @param {object} [caps]      capabilities from the tier-changed message
+   * @param {object} [surfaces]  localSurfaces() snapshot, used when offline
+   * @param {string} [provider]  BYOK provider id
+   * @returns {string}
+   */
+  greetingFor(tier, caps = {}, surfaces = null, provider = null) {
+    caps = caps || {};
+    if (tier === "local-agent") {
+      const v = caps.version ? ` v${caps.version}` : "";
+      const n = typeof caps.toolCount === "number" ? `, ${caps.toolCount} tools` : "";
+      return `Local agent (awdk${v}${n}). Ask me anything.`;
+    }
+    if (tier === "node-only") return "awnode. Ask me anything.";
+    if (tier === "genesis") return "Fleet (AitherOS). Ask me anything.";
+    if (tier === "cloud-only") return "Cloud gateway. Ask me anything.";
+    if (tier === "provider") return `BYOK${provider ? ` (${provider})` : ""}. Ask me anything.`;
+    if (tier === "offline") {
+      const parts = surfaces && typeof surfaces === "object"
+        ? Object.keys(surfaces).map((k) =>
+            `${this.SURFACE_LABELS[k] || k} ${surfaces[k] && surfaces[k].up ? "up" : "down"}`)
+        : [];
+      return `Offline. ${this.OFFLINE_CHAT_MESSAGE}.` + (parts.length ? ` Probed: ${parts.join(", ")}.` : "");
+    }
+    return "Detecting a backend...";
+  },
+
+  /**
+   * Map one awdk /chat/stream SSE event to what the side panel consumes.
+   * awdk emits session_start, heartbeat, token {t}, tool_call, tool_result,
+   * answer {answer}, error {error}, complete. Pure, so it is unit-tested.
+   * @returns {{kind: "chunk"|"answer"|"error"|"tool"|"session"|"complete"|"ignore", text?: string, data?: object}}
+   */
+  adkEventToChat(event, data) {
+    const d = data && typeof data === "object" ? data : {};
+    const type = d.type || event || "message";
+    if (type === "token") return { kind: "chunk", text: String(d.t || "") };
+    if (type === "answer") return { kind: "answer", text: String(d.answer || "") };
+    if (type === "error") return { kind: "error", text: String(d.error || "awdk error") };
+    if (type === "tool_call" || type === "tool_result") return { kind: "tool", data: d };
+    if (type === "session_start") return { kind: "session", data: d };
+    if (type === "complete") return { kind: "complete", data: d };
+    return { kind: "ignore" };
+  },
+
   /** Capabilities for a tier (offline preset for unknown tiers). */
   capabilitiesFor(tier) {
     return this.CAPABILITY_PRESETS[tier] || this.CAPABILITY_PRESETS.offline;
@@ -92,10 +175,88 @@ const TierDetect = {
   },
 
   /**
+   * Probe a JSON /health and return the parsed body, or null. Never throws.
+   * @param {string} url
+   * @param {number} timeoutMs
+   * @returns {Promise<object|null>}
+   */
+  async probeJson(url, timeoutMs = 1500) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+      if (!r.ok) return null;
+      const body = await r.json();
+      return body && typeof body === "object" ? body : null;
+    } catch {
+      return null;
+    }
+  },
+
+  /** Where a named local surface lives (launcher map when loaded, else the
+   *  fixed fallback). tier-detect must not depend on local-endpoints.js load
+   *  order, so the fallback ports are repeated here. */
+  async localBase(name) {
+    const fallback = {
+      adk: 9001, awnode: 8090, awsh: 8362, awhub: 47933, awdesk: 47931, mcpgateway: 8182,
+    };
+    const resolver = typeof globalThis !== "undefined" ? globalThis.AitherLocalEndpoints : null;
+    if (resolver && typeof resolver.endpointFor === "function") {
+      try {
+        const base = await resolver.endpointFor(name);
+        if (base) return String(base).replace(/\/+$/, "");
+      } catch { /* fall through to the fixed port */ }
+    }
+    return fallback[name] ? `http://${this.LOOPBACK}:${fallback[name]}` : null;
+  },
+
+  /**
+   * The awdk daemon, if it is up. Healthy means the body SAYS healthy -- a
+   * 200 from some other process squatting on the port is not an agent.
+   * @param {string} [adkBase]
+   * @returns {Promise<object|null>} the local-agent tier result, or null
+   */
+  async detectLocalAgent(adkBase) {
+    const base = adkBase || (await this.localBase("adk"));
+    if (!base) return null;
+    const health = await this.probeJson(`${base}/health`, 1500);
+    if (!health || health.status !== "healthy") return null;
+    const tools = health.tools && typeof health.tools === "object" ? health.tools : {};
+    return {
+      tier: "local-agent",
+      chatUrl: base,
+      nodeUrl: null,
+      chatShape: "adk-sse",
+      capabilities: {
+        ...this.CAPABILITY_PRESETS["local-agent"],
+        tools: tools.mode || null,
+        toolCount: typeof tools.registered === "number" ? tools.registered : null,
+        version: health.version || null,
+        agent: health.agent || null,
+      },
+    };
+  },
+
+  /**
+   * Is each local surface up? Health probes only, in parallel, no auth and no
+   * Origin-sensitive call. These are CAPABILITY SOURCES shown to the person,
+   * not chat tiers: awsh or the aw hub being up does not make chat work.
+   * @returns {Promise<Object<string, {url: string|null, up: boolean, version?: string}>>}
+   */
+  async localSurfaces(names = ["adk", "awsh", "awhub", "awdesk", "awnode"]) {
+    const out = {};
+    await Promise.all(names.map(async (name) => {
+      const base = await this.localBase(name);
+      if (!base) { out[name] = { url: null, up: false }; return; }
+      const body = await this.probeJson(`${base}/health`, 1500);
+      out[name] = { url: base, up: !!body, ...(body && body.version ? { version: String(body.version) } : {}) };
+    }));
+    return out;
+  },
+
+  /**
    * Rank of each tier, best first. Used to tell an UPGRADE from a DEMOTION.
    * Unknown tiers rank below offline so anything real beats them.
    */
-  TIER_RANK: { genesis: 4, "node-only": 3, provider: 2, "cloud-only": 1, offline: 0, unknown: -1 },
+  TIER_RANK: { genesis: 5, "local-agent": 4, "node-only": 3, provider: 2, "cloud-only": 1, offline: 0, unknown: -1 },
 
   /** Consecutive demotion proposals required before a tier is actually lowered. */
   DEMOTE_STRIKES: 3,
@@ -177,6 +338,10 @@ const TierDetect = {
     const gateway = cloudGatewayUrl || "https://gateway.aitherium.com";
     const lo = this.LOOPBACK;
 
+    // The awdk probe starts NOW, concurrently with the fleet race below, so a
+    // machine with no fleet pays one short timeout, not the fleet's plus awdk's.
+    const localAgentP = this.detectLocalAgent(ports.adkUrl);
+
     // 1. Genesis via Veil bridge — full AitherOS. The deployed fleet maps
     //    aitheros-veil-lb to 3080; localhost:3000 is usually `npm run dev`
     //    with HMR, where every recompile RESETS in-flight SSE ("Stream
@@ -202,6 +367,7 @@ const TierDetect = {
       veilCandidates.map((vp) => ({ vp, url: `http://${lo}:${vp}/api/bridge/genesis/health` })),
     );
     if (winner) {
+      localAgentP.catch(() => {});
       const vp = winner.vp;
       return {
         tier: "genesis",
@@ -229,12 +395,20 @@ const TierDetect = {
       };
     }
 
-    // 2. awnode direct HTTP (standalone, no Docker TLS issue)
-    if (await this.probe(`http://${lo}:${node}/health`)) {
+    // 2. The awdk daemon on this machine -- a real agent with tools, no fleet.
+    const localAgent = await localAgentP;
+    if (localAgent) return localAgent;
+
+    // 3. awnode direct HTTP (standalone, no Docker TLS issue). An explicit
+    //    nodePort wins; otherwise the port comes from the endpoint map.
+    const nodeBase = ports.nodePort
+      ? `http://${lo}:${node}`
+      : ((await this.localBase("awnode")) || `http://${lo}:${node}`);
+    if (await this.probe(`${nodeBase}/health`)) {
       return {
         tier: "node-only",
-        chatUrl: `http://${lo}:${node}`,
-        nodeUrl: `http://${lo}:${node}`,
+        chatUrl: nodeBase,
+        nodeUrl: nodeBase,
       };
     }
 

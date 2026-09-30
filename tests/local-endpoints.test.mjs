@@ -94,7 +94,7 @@ function sandbox(fetchImpl) {
     check('launcher answer merges over the fallback', map.source === 'launcher' &&
       map.endpoints.awsh === 'http://127.0.0.1:7777')
     check('merge keeps every fallback key', map.endpoints.awdesk === 'http://127.0.0.1:47931' &&
-      map.endpoints.adk === 'http://127.0.0.1:9001' && map.endpoints.awnode === 'http://127.0.0.1:8182')
+      map.endpoints.adk === 'http://127.0.0.1:9001' && map.endpoints.mcpgateway === 'http://127.0.0.1:8182' && map.endpoints.awnode === 'http://127.0.0.1:8090' && map.endpoints.awhub === 'http://127.0.0.1:47933')
   }
   // no launcher → fallback map, never empty, never throws
   {

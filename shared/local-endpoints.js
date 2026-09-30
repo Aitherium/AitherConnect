@@ -54,11 +54,18 @@
   const FALLBACK = Object.freeze({
     launcher: "http://" + LOOPBACK + ":" + LAUNCHER_PORT,
     awsh: "http://" + LOOPBACK + ":8362",
-    // awnode is the MCP gateway (services.yaml: AitherMCPGateway). Rung 1 of
-    // the dispatch ladder resolves here, so an extension that cannot find it
-    // has no platform tools and no way to notice.
-    awnode: "http://" + LOOPBACK + ":8182",
+    // The MCP gateway. This key used to be called "awnode", which is a
+    // DIFFERENT surface (the lightweight local node on :8090): one name for two
+    // ports meant a probe of "awnode" reported the gateway, and the node was
+    // never looked for at all. Each surface now has exactly one key.
+    mcpgateway: "http://" + LOOPBACK + ":8182",
+    // awnode -- the lightweight local gateway/MCP node (node-only chat tier).
+    awnode: "http://" + LOOPBACK + ":8090",
+    // awdk daemon (`adk serve`). The local-agent chat tier.
     adk: "http://" + LOOPBACK + ":9001",
+    // aw hub -- one MCP hub for the aw* bricks. Health only: a capability
+    // source, never a chat tier.
+    awhub: "http://" + LOOPBACK + ":47933",
     awdesk: "http://" + LOOPBACK + ":47931",
   });
 

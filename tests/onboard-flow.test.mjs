@@ -41,7 +41,7 @@ const js = read('onboard/onboard.js')
 const panel0 = html.slice(html.indexOf('id="panel-0"'), html.indexOf('id="panel-byok-provider"'))
 check('step 0 is "Get AitherOS on this computer"', /<h2>Get AitherOS on this computer<\/h2>/.test(panel0))
 check('step 0 probes adk, awsh and the gateway',
-  ['status-adk', 'status-awsh', 'status-awnode'].every((id) => panel0.includes(`id="${id}"`)))
+  ['status-adk', 'status-awsh', 'status-mcpgateway'].every((id) => panel0.includes(`id="${id}"`)))
 check('step 0 has "Check again" and the installer block',
   panel0.includes('id="recheck-local0"') && panel0.includes('id="install-cmd"'))
 check('BYOK stays reachable from step 0', panel0.includes('id="choice-byok"'))
@@ -93,9 +93,9 @@ async function main() {
   // local detection
   {
     const { F, fetch, calls } = load((u) => u.startsWith('http://127.0.0.1:9001/health') ? { status: 200, body: { status: 'healthy' } } : new Error('ECONNREFUSED'))
-    const r = await F.probeLocal({ fetch, endpoints: { adk: 'http://127.0.0.1:9001', awsh: 'http://127.0.0.1:8362', awnode: 'http://127.0.0.1:8182' } })
-    check('adk answering => found', r.found === true && r.adk.ok && !r.awsh.ok && !r.awnode.ok)
-    check('probes all three health endpoints', ['9001', '8362', '8182'].every((p) => calls.some((c) => c.url === `http://127.0.0.1:${p}/health`)))
+    const r = await F.probeLocal({ fetch, endpoints: { adk: 'http://127.0.0.1:9001', awsh: 'http://127.0.0.1:8362', mcpgateway: 'http://127.0.0.1:8182', awnode: 'http://127.0.0.1:8090' } })
+    check('adk answering => found', r.found === true && r.adk.ok && !r.awsh.ok && !r.mcpgateway.ok && !r.awnode.ok)
+    check('probes all three health endpoints', ['9001', '8362', '8182', '8090'].every((p) => calls.some((c) => c.url === `http://127.0.0.1:${p}/health`)))
     const none = load(() => new Error('ECONNREFUSED'))
     const r2 = await none.F.probeLocal({ fetch: none.fetch, endpoints: {} })
     check('nothing answering => not found (installer shown)', r2.found === false)

@@ -99,7 +99,7 @@ function paintProbe(id, r) {
 }
 
 async function detectLocal() {
-  ["status-adk", "status-awsh", "status-awnode"].forEach((id) => {
+  ["status-adk", "status-awsh", "status-mcpgateway"].forEach((id) => {
     const el = $(id);
     if (el) { el.className = "status miss"; el.textContent = "checking…"; }
   });
@@ -107,7 +107,7 @@ async function detectLocal() {
   state.local = local;
   paintProbe("status-adk", local.adk);
   paintProbe("status-awsh", local.awsh);
-  paintProbe("status-awnode", local.awnode);
+  paintProbe("status-mcpgateway", local.mcpgateway);
   $("local-found").classList.toggle("hidden", !local.found);
   $("local-install").classList.toggle("hidden", local.found);
   $("choice-confirm").textContent = local.found ? "Continue" : "Continue without installing";
@@ -143,7 +143,8 @@ document.addEventListener("DOMContentLoaded", () => {
     initPortal();
   });
 
-  initStep0();
+  if (typeof location !== "undefined" && location.hash === "#first-run") initFirstRun();
+  else initStep0();
 });
 
 // === BYOK PATH ===
@@ -368,7 +369,7 @@ async function recheckFleet() {
   const local = await detectLocal();
   if (local.found) {
     statusEl.className = "status ok";
-    statusEl.textContent = ["adk", "awsh", "awnode"].filter((k) => local[k] && local[k].ok).join(" + ");
+    statusEl.textContent = ["adk", "awsh", "awnode", "mcpgateway"].filter((k) => local[k] && local[k].ok).join(" + ");
   } else {
     statusEl.className = "status miss";
     statusEl.textContent = "not detected";
@@ -563,9 +564,10 @@ async function runDeviceSignIn({ email } = {}) {
     });
     const me = await Flow.identityMe({ fetch: (u, o) => fetch(u, o), identityUrl: idp, token: result.token });
     if (me.ok) state.user = me.user;
+    await persistSignIn(result.token, state.user);
     $("device-status").textContent = "Approved.";
     msg("portal-message", `Signed in${state.user && state.user.email ? ` as ${state.user.email}` : ""}.`, "success");
-    setTimeout(() => initPortalMode(), 350);
+    setTimeout(() => initFirstRun(), 350);
   } catch (e) {
     msg("portal-message", Flow.UNREACHABLE_MESSAGE, "warn");
   } finally {
@@ -773,3 +775,154 @@ function saveSettings(settings) {
     });
   });
 }
+
+// === FIRST RUN (AWC-B4): workspace -> backend -> first chat ===
+
+const WP = self.AitherWorkspacePlane;
+
+/**
+ * The sign-in record survives a browser restart (storage.session does not).
+ * shared/auth-store.js owns the shape when present; this writes the same shape.
+ */
+async function persistSignIn(token, user) {
+  if (!token) return;
+  const u = user || {};
+  const rec = {
+    user_bearer: token, expires_at: null, source: "oidc",
+    user: { id: u.id || "", username: u.username || u.email || "", display_name: u.display_name || u.username || u.email || "",
+      tenant_slug: u.tenant_slug || "" },
+  };
+  if (self.AitherAuthStore && self.AitherAuthStore.set) await self.AitherAuthStore.set(rec);
+  else await chrome.storage.local.set({ aither_auth: rec });
+}
+
+function send(message) {
+  return new Promise((resolve) => chrome.runtime.sendMessage(message, (r) => resolve(r || { ok: false })));
+}
+
+async function initFirstRun() {
+  showPanel("panel-first-run");
+  showPill(2);
+  state.frBackend = null;
+  $("fr-reply").innerHTML = "";
+  $("fr-send").disabled = true;
+  $("fr-finish").disabled = true;
+  await loadFirstRunWorkspaces();
+  await loadFirstRunBackends();
+}
+
+async function loadFirstRunWorkspaces() {
+  const plane = await send({ type: "awc-workspace-state", refresh: true, force: true });
+  const b = plane && plane.badge;
+  const sel = $("fr-workspace-select");
+  sel.innerHTML = "";
+  if (!b || b.state === "signed-out" || b.state === "expired") {
+    $("fr-workspace").classList.add("hidden");
+    msg("fr-workspace-message", "Not signed in — local backends only.", "warn");
+    return;
+  }
+  const list = plane.workspaces || [];
+  if (!list.length) {
+    $("fr-workspace").classList.add("hidden");
+    msg("fr-workspace-message", b.href ? `${b.text}: ${b.href}` : b.text, "warn");
+    return;
+  }
+  for (const w of list) {
+    const o = document.createElement("option");
+    o.value = WP.wsId(w);
+    o.textContent = WP.wsName(w);
+    sel.appendChild(o);
+  }
+  const pre = (plane.selection && (plane.selection.id || plane.selection.suggested)) || WP.wsId(list[0]);
+  sel.value = pre;
+  $("fr-workspace").classList.remove("hidden");
+  msg("fr-workspace-message", list.length === 1 ? `Using ${WP.wsName(list[0])}.` : "Pick the workspace this browser works in.",
+    list.length === 1 ? "success" : "warn");
+  if (!plane.selection || plane.selection.id !== pre) await send({ type: "awc-select-workspace", id: pre });
+}
+
+$("fr-workspace-select").addEventListener("change", async () => {
+  await send({ type: "awc-select-workspace", id: $("fr-workspace-select").value });
+  await loadFirstRunBackends();
+});
+
+async function loadFirstRunBackends() {
+  const r = await send({ type: "awc-backends" });
+  const box = $("fr-backends");
+  box.innerHTML = "";
+  const list = (r && r.backends) || [];
+  if (!list.length) {
+    msg("fr-backends", "Nothing detected. Install awdk (step 0) or sign in.", "warn");
+  }
+  for (const be of list) {
+    const row = document.createElement("label");
+    row.className = "install-row";
+    const input = document.createElement("input");
+    input.type = "radio"; input.name = "fr-backend"; input.value = be.id; input.disabled = !be.ready;
+    input.addEventListener("change", () => selectFirstRunBackend(be));
+    const who = document.createElement("span");
+    who.className = "who";
+    who.textContent = be.label;
+    if (!be.ready && be.hint) {
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = ` — not running; start it with: ${be.hint}`;
+      who.appendChild(hint);
+    }
+    if (be.href) {
+      const a = document.createElement("a");
+      a.href = "#"; a.className = "small-link"; a.textContent = " add a provider key to the workspace";
+      a.addEventListener("click", (e) => { e.preventDefault(); chrome.tabs.create({ url: be.href }); });
+      who.appendChild(a);
+    }
+    row.appendChild(input);
+    row.appendChild(who);
+    box.appendChild(row);
+  }
+  state.frLocalAgents = (r && r.localAgents) || [];
+}
+
+async function selectFirstRunBackend(be) {
+  state.frBackend = be.id;
+  $("fr-send").disabled = false;
+  $("fr-finish").disabled = true;
+  const agentSel = $("fr-agent");
+  agentSel.innerHTML = "";
+  let agents = [];
+  if (be.id === "local-agent") agents = state.frLocalAgents || [];
+  else if (be.tier === "cloud") agents = (await send({ type: "awc-workspace-state" })).agents || [];
+  for (const a of agents) {
+    const o = document.createElement("option");
+    o.value = a.id; o.textContent = a.name; agentSel.appendChild(o);
+  }
+  $("fr-agent-field").classList.toggle("hidden", !agents.length);
+  await send({ type: "awc-set-backend", backend: be.id });
+}
+
+$("fr-send").addEventListener("click", async () => {
+  if (!state.frBackend) return;
+  $("fr-send").disabled = true;
+  msg("fr-reply", "Waiting for the first reply…", "warn");
+  const agentSel = $("fr-agent");
+  const r = await send({
+    type: "awc-first-chat", backend: state.frBackend, prompt: $("fr-prompt").value,
+    agent: agentSel.options.length ? agentSel.value : null,
+  });
+  $("fr-send").disabled = false;
+  if (r.ok) {
+    msg("fr-reply", `Reply: ${r.reply}`, "success");
+    $("fr-finish").disabled = false;
+  } else {
+    msg("fr-reply", `No reply: ${r.error || "failed"}. Pick another backend or check again.`, "error");
+  }
+});
+
+$("fr-finish").addEventListener("click", async () => {
+  await chrome.storage.local.set({ aither_onboarded_at: Date.now(), aither_first_chat_backend: state.frBackend });
+  msg("fr-reply", "Setup complete. Open the side panel to keep chatting.", "success");
+  showPill(3);
+});
+$("fr-recheck").addEventListener("click", () => initFirstRun());
+$("fr-advanced").addEventListener("click", () => initPortalMode());
+// Local-only path: choose a local backend and send a first message too.
+$("fleet-first-run").addEventListener("click", () => initFirstRun());

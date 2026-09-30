@@ -241,6 +241,7 @@ async function populateForm(settings) {
   // shows the shipped default rather than an unchecked box that lies about it.
   $("commandBarEnabled").checked = mergedSettings.commandBarEnabled !== false;
   $("osOverlayEnabled").checked = !!mergedSettings.osOverlayEnabled;
+  $("deskSpeakReplies").checked = !!mergedSettings.deskSpeakReplies;
   $("osOverlayAutoStart").checked = !!mergedSettings.osOverlayAutoStart;
   $("syncEnabled").checked = !!mergedSettings.syncEnabled;
   // Tier settings
@@ -313,6 +314,7 @@ function readForm() {
     ragEnabled: $("ragEnabled").checked,
     commandBarEnabled: $("commandBarEnabled").checked,
     osOverlayEnabled: $("osOverlayEnabled").checked,
+    deskSpeakReplies: $("deskSpeakReplies").checked,
     osOverlayAutoStart: $("osOverlayAutoStart").checked,
     syncEnabled: $("syncEnabled").checked,
     // Tier settings
@@ -1372,6 +1374,11 @@ function showLinkHome(home) {
     console.debug("[link] state unavailable:", e && e.message);
   }
 })();
+
+// Re-open the first-run wizard: workspace, backend, first chat (AWC-B4).
+$("btn-first-run")?.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("onboard/onboard.html#first-run") });
+});
 
 $("btn-link")?.addEventListener("click", async () => {
   const btn = $("btn-link");

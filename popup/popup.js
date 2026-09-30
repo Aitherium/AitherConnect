@@ -124,50 +124,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!section || !list) return;
 
     try {
-      // Use GenesisAuth (from genesis-auth.js) to list open decisions.
-      // GenesisAuth uses portal bearer authentication (from chrome.storage.session).
-      if (typeof self.GenesisAuth === 'undefined') {
-        // Try to get decisions via background message instead
-        const resp = await chrome.runtime.sendMessage({ type: 'list-decisions' });
-        if (!resp?.ok || !resp.decisions?.decisions?.length) {
-          section.style.display = 'none';
-          return;
-        }
-        renderDecisionCards(resp.decisions.decisions);
-        section.style.display = '';
-        errorDiv.style.display = 'none';
-        noTokenDiv.style.display = 'none';
-      } else {
-        const data = await self.GenesisAuth.listDecisions('open');
-        if (!data?.decisions?.length) {
-          section.style.display = 'none';
-          return;
-        }
-        renderDecisionCards(data.decisions);
-        section.style.display = '';
-        errorDiv.style.display = 'none';
-        noTokenDiv.style.display = 'none';
-      }
-    } catch (e) {
-      console.debug('[popup] decisions render failed:', e);
-      // Check if it's a "not found" or unavailable error
-      if (e.code === 'ENDPOINT_NOT_FOUND') {
-        errorDiv.textContent = 'Decisions unavailable — Genesis is still loading';
-        errorDiv.style.display = '';
-        noTokenDiv.style.display = 'none';
-      } else if (e.code === 'GENESIS_UNAVAILABLE') {
-        errorDiv.textContent = 'Cannot reach Genesis — service offline or unreachable';
-        errorDiv.style.display = '';
-        noTokenDiv.style.display = 'none';
-      } else if (String(e).includes('401')) {
-        noTokenDiv.textContent = 'Sign in to your account to see pending decisions';
+      // Decisions come from awsh (the canonical store) through the background
+      // worker's paired HarnessAuth token. Never Genesis.
+      const resp = await chrome.runtime.sendMessage({ type: 'list-decisions' });
+      if (resp?.needsPair) {
+        noTokenDiv.textContent = 'Pair awconnect with your desk (open the side panel, Decisions tab)';
         noTokenDiv.style.display = '';
         errorDiv.style.display = 'none';
-      } else {
-        errorDiv.textContent = `Failed: ${e.message || String(e)}`;
-        errorDiv.style.display = '';
-        noTokenDiv.style.display = 'none';
+        section.style.display = '';
+        list.innerHTML = '';
+        return;
       }
+      if (!resp?.ok) throw new Error(resp?.error || 'awsh unreachable');
+      const cards = resp.decisions?.decisions || [];
+      if (!cards.length) {
+        section.style.display = 'none';
+        return;
+      }
+      renderDecisionCards(cards);
+      section.style.display = '';
+      errorDiv.style.display = 'none';
+      noTokenDiv.style.display = 'none';
+    } catch (e) {
+      console.debug('[popup] decisions render failed:', e);
+      errorDiv.textContent = `Decisions unavailable: ${e.message || String(e)}`;
+      errorDiv.style.display = '';
+      noTokenDiv.style.display = 'none';
       section.style.display = '';
       list.innerHTML = '';
     }
@@ -216,19 +198,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (feedback) feedback.style.display = 'none';
 
           try {
-            // Use GenesisAuth if available, else go through background
-            let result;
-            if (typeof self.GenesisAuth !== 'undefined') {
-              result = await self.GenesisAuth.answerDecision(cardId, choice, '', 'awconnect');
-            } else {
-              const r = await chrome.runtime.sendMessage({
-                type: 'answer-decision',
-                cardId,
-                choice,
-                via: 'awconnect',
-              });
-              result = r;
-            }
+            const result = await chrome.runtime.sendMessage({
+              type: 'answer-decision',
+              cardId,
+              choice,
+              via: 'awconnect',
+            });
 
             if (result?.status === 'error' || !result?.ok) {
               if (feedback) {

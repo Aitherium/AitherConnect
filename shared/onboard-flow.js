@@ -98,7 +98,8 @@
     const targets = [
       ["adk", eps.adk || "http://127.0.0.1:9001"],
       ["awsh", eps.awsh || "http://127.0.0.1:8362"],
-      ["awnode", eps.awnode || "http://127.0.0.1:8182"],
+      ["mcpgateway", eps.mcpgateway || "http://127.0.0.1:8182"],
+      ["awnode", eps.awnode || "http://127.0.0.1:8090"],
     ];
     const out = { found: false };
     await Promise.all(targets.map(async ([name, base]) => {
