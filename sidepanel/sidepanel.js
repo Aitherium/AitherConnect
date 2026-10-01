@@ -4745,7 +4745,7 @@ ${res.error}
         });
       }
     } catch { /* SW not ready */ }
-    // Aitherium products (Deep Research Studio, Saga, Agent Home, Iris): the
+    // Aitherium products (Deep Research Studio, Saga, Aither Hearth, Iris): the
     // add-on catalog. Install/license state comes from the host's native
     // launcher (awdk is_pack_available); a click launches, opens or shops.
     try {

@@ -9176,7 +9176,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })();
       return true;
 
-    // ── Aitherium products add-on catalog (Deep Research, Saga, Agent Home, Iris) ──
+    // ── Aitherium products add-on catalog (Deep Research, Saga, Aither Hearth, Iris) ──
     // Install + license state is the host's: the native launcher answers GET
     // /products with awdk's is_pack_available() per product. Launcher down =>
     // the catalog's offline rows (license unknown, card opens the shop).

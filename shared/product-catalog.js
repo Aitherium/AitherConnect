@@ -1,6 +1,9 @@
 /**
  * The Aitherium desktop products as awconnect's add-on catalog: Deep Research
- * Studio, Saga, Agent Home (local, license-gated by awdk packs) and Iris (hosted).
+ * Studio, Saga, Aither Hearth (local, license-gated by awdk packs) and Iris (hosted).
+ * Aither Hearth keeps the id/pack/shop slug `agent-home` (packaging verdict
+ * 2026-09-29); only its NAME changed, and test_products.py now pins names too --
+ * this file was the one mirror still selling "Agent Home" on 2026-10-01.
  *
  * The extension cannot see the disk, so install + license state comes from the
  * host's native launcher (AitherDesktop launcher.py, :8299) at GET /products,
@@ -25,8 +28,8 @@
       blurb: "Multi-source, fact-checked research reports on your own machine." }),
     Object.freeze({ id: "saga", name: "Saga", icon: "🎲", kind: "local", pack: "saga", category: "creative",
       blurb: "An AI game master for solo tabletop RPGs, running on your PC." }),
-    Object.freeze({ id: "agent-home", name: "Agent Home", icon: "🏠", kind: "local", pack: "agent-home",
-      category: "agents", blurb: "A self-hosted agent kit: your own agent, memory and tools at home." }),
+    Object.freeze({ id: "agent-home", name: "Aither Hearth", icon: "🏠", kind: "local", pack: "agent-home",
+      category: "agents", blurb: "Your own agent on your own machine; reach it from your phone." }),
     Object.freeze({ id: "iris", name: "Iris", icon: "🎨", kind: "hosted", pack: null, category: "creative",
       webUrl: "https://aitherium.com/iris",
       blurb: "Hosted image and scene art studio (credits or Iris Pro)." }),
