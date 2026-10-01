@@ -35,6 +35,37 @@
       blurb: "Hosted image and scene art studio (credits or Iris Pro)." }),
   ]);
 
+  // Windows of the hosted Aither Desktop (aitherium.com/?shell=aither-desktop).
+  // These are NOT products: no pack, no shop, no launcher row. The platform apps
+  // manifest lists Hearth with showInNav:false and no route (it is a window, not
+  // a page), so the tenant registry never hands awconnect a card for it -- this
+  // list is how the side panel opens the platform Hearth at all. Kept out of
+  // PRODUCTS so the AitherDesktop parity test (test_products.py) is untouched.
+  const DESKTOP_URL = "https://aitherium.com/?shell=aither-desktop";
+  const PLATFORM_WINDOWS = Object.freeze([
+    Object.freeze({ id: "hearth", name: "Hearth", icon: "🏠", category: "agents",
+      blurb: "Your home assistant on the platform: reminders, approval cards, signed receipts." }),
+  ]);
+
+  function windowUrl(win) {
+    return `${DESKTOP_URL}&app=${encodeURIComponent(win.id)}`;
+  }
+
+  /** Apps-grid cards for the desktop windows; a click opens the window in a tab. */
+  function windowCards() {
+    return PLATFORM_WINDOWS.map((win) => ({
+      id: `window-${win.id}`,
+      name: win.name,
+      icon: win.icon,
+      category: win.category,
+      desc: win.blurb,
+      status: "stable", // beta cards hide behind "Experimental"; this one must show
+      installed: true, // sign-in is the desktop's job; the card always renders
+      route: windowUrl(win),
+      openInTab: true, // a tab keeps the first-party aitherium.com session
+    }));
+  }
+
   function byId(id) {
     return PRODUCTS.find((p) => p.id === String(id || "").trim().toLowerCase()) || null;
   }
@@ -104,7 +135,8 @@
     });
   }
 
-  const api = { SHOP_BASE, PRODUCTS, byId, shopUrl, offlineRow, mergeStatus, appCards };
+  const api = { SHOP_BASE, PRODUCTS, byId, shopUrl, offlineRow, mergeStatus, appCards,
+    DESKTOP_URL, PLATFORM_WINDOWS, windowUrl, windowCards };
   global.AitherProductCatalog = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof self !== "undefined" ? self : globalThis);

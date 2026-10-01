@@ -4034,7 +4034,7 @@ ${res.error}
             : `${escapeHtml(app.desc)} — add-on (not enabled on your plan)`;
       const portal = licenseGated ? (app.license.portal_url || "") : "";
       return `
-        <div class="app-card fade-in" data-product="${escapeHtml(app.product || "")}" data-route="${escapeHtml(app.route || "")}" data-name="${escapeHtml(app.name)}" data-entitled="${entitled ? 1 : 0}" data-openable="${openable ? 1 : 0}" data-local-only="${app.localOnly ? 1 : 0}" data-license-gated="${licenseGated ? 1 : 0}" data-portal="${escapeHtml(portal)}" title="${title}"${teaserStyle}>
+        <div class="app-card fade-in" data-product="${escapeHtml(app.product || "")}" data-tab="${app.openInTab ? 1 : 0}" data-route="${escapeHtml(app.route || "")}" data-name="${escapeHtml(app.name)}" data-entitled="${entitled ? 1 : 0}" data-openable="${openable ? 1 : 0}" data-local-only="${app.localOnly ? 1 : 0}" data-license-gated="${licenseGated ? 1 : 0}" data-portal="${escapeHtml(portal)}" title="${title}"${teaserStyle}>
           ${badgeHtml}
           <span class="app-icon">${app.icon}</span>
           <span class="app-name">${lock}${escapeHtml(app.name)}</span>
@@ -4048,6 +4048,11 @@ ${res.error}
         const name = card.dataset.name;
         if (card.dataset.product) {
           openProductCard(card.dataset.product, name);
+          return;
+        }
+        if (card.dataset.tab === "1" && /^https:\/\//i.test(card.dataset.route || "")) {
+          addEvent("APP", `${name}: opening the desktop window`);
+          try { chrome.tabs.create({ url: card.dataset.route }); } catch { window.open(card.dataset.route, "_blank"); }
           return;
         }
         if (card.dataset.openable === "0") {
@@ -4748,6 +4753,13 @@ ${res.error}
     // Aitherium products (Deep Research Studio, Saga, Aither Hearth, Iris): the
     // add-on catalog. Install/license state comes from the host's native
     // launcher (awdk is_pack_available); a click launches, opens or shops.
+    // Platform desktop windows (Hearth): no registry route exists for them, so
+    // the catalog supplies the aitherium.com/?shell=aither-desktop&app=<id> URL.
+    try {
+      const cat = self.AitherProductCatalog;
+      DYNAMIC_APPS = DYNAMIC_APPS.filter((a) => !a.openInTab);
+      if (cat && typeof cat.windowCards === "function") DYNAMIC_APPS.push(...cat.windowCards());
+    } catch { /* catalog not loaded */ }
     try {
       const ps = await chrome.runtime.sendMessage({ type: "products-status" });
       DYNAMIC_APPS = DYNAMIC_APPS.filter((a) => !a.product);

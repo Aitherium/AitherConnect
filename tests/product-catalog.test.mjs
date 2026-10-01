@@ -88,5 +88,22 @@ t('sidepanel loads the catalog and routes product clicks', () => {
   assert.match(sp, /data-product=/)
 })
 
+t('platform Hearth: a card that opens the desktop hearth window in a tab', () => {
+  // The apps manifest gives Hearth no route (a window, not a page), so without
+  // this card awconnect had no way to open the platform Hearth at all.
+  const cards = cat.windowCards()
+  const hearth = cards.find(c => c.id === 'window-hearth')
+  assert.ok(hearth, 'no Hearth window card')
+  assert.equal(hearth.route, 'https://aitherium.com/?shell=aither-desktop&app=hearth')
+  assert.equal(hearth.openInTab, true)
+  assert.notEqual(hearth.status, 'beta', 'a beta card is hidden by default in the grid')
+  assert.ok(!cat.PRODUCTS.some(p => p.id === 'hearth'), 'windows stay out of PRODUCTS (parity test)')
+  const sp = readFileSync(join(root, 'sidepanel', 'sidepanel.js'), 'utf8')
+  assert.ok(/cat\.windowCards\(\)/.test(sp), 'sidepanel never adds the window cards')
+  assert.ok(/data-tab="\$\{app\.openInTab \? 1 : 0\}"/.test(sp), 'card does not carry data-tab')
+  assert.ok(/card\.dataset\.tab === "1"[\s\S]{0,400}chrome\.tabs\.create\(\{ url: card\.dataset\.route \}\)/.test(sp),
+    'a window card click does not open its route in a tab')
+})
+
 if (failed) { console.log(`${failed} failed`); process.exit(1) }
 console.log('product-catalog: all passed')
