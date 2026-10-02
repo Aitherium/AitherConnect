@@ -590,3 +590,69 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 });
+
+// ── Desk avatars: mute / volume / captions ────────────────────────────────
+// Its own listener, so nothing above can be broken by it and it can be removed
+// in one piece. All the rules (one field per write, never trust a bare ok, the
+// desk's own bounds) live in shared/desk-remote.js; this is only the wiring.
+document.addEventListener('DOMContentLoaded', async () => {
+  const section = document.getElementById('desk-section');
+  const mute = document.getElementById('desk-mute');
+  const volume = document.getElementById('desk-volume');
+  const volumeLabel = document.getElementById('desk-volume-label');
+  const bubbles = document.getElementById('desk-bubbles');
+  const status = document.getElementById('desk-status');
+  if (!section || !mute || !volume || !bubbles || !status || !self.AitherDeskRemote || !self.AitherPortal) return;
+
+  const portal = { get: self.AitherPortal.getProfileSettings, put: self.AitherPortal.putProfileSettings };
+  if (typeof portal.get !== 'function' || typeof portal.put !== 'function') return;
+
+  // What the store last told us. A failed write falls back to this when the
+  // re-read fails too (offline), so a control never keeps a value nothing stored.
+  let known = null;
+  const show = (desk) => {
+    known = desk;
+    mute.checked = desk.muted;
+    bubbles.checked = desk.bubbles;
+    volume.value = String(desk.volume);
+    volume.disabled = desk.muted;
+    volumeLabel.textContent = desk.muted ? 'muted' : Math.round(desk.volume * 100) + '%';
+    status.style.color = 'var(--text-muted)';
+    status.textContent = desk.stored
+      ? 'Reaches your desk on its next sync.'
+      : 'No desk has synced to this account yet. Turn on sync in the desk’s Cast window.';
+  };
+
+  const first = await self.AitherDeskRemote.readDeskRemote(portal);
+  // Signed out (or the portal is unreachable): stay hidden rather than show
+  // controls that cannot do anything.
+  if (!first.ok) return;
+  section.style.display = '';
+  show(first.desk);
+
+  const write = async (sectionName, field, value) => {
+    status.style.color = 'var(--text-muted)';
+    status.textContent = 'Saving…';
+    const result = await self.AitherDeskRemote.writeDeskField(portal, sectionName, field, value);
+    if (result.ok) {
+      show(result.desk);
+      return;
+    }
+    status.style.color = 'var(--error)';
+    status.textContent = 'Not saved: ' + result.reason;
+    // Put the controls back to what is actually stored, not what was clicked.
+    const again = await self.AitherDeskRemote.readDeskRemote(portal);
+    const reason = status.textContent;
+    show(again.ok ? again.desk : known);
+    status.style.color = 'var(--error)';
+    status.textContent = reason;
+  };
+
+  mute.addEventListener('change', () => { void write('voice', 'muted', mute.checked); });
+  bubbles.addEventListener('change', () => { void write('stage', 'bubbles', bubbles.checked); });
+  // The label follows the thumb; the WRITE happens on release. A request per
+  // pixel of drag would be dozens of PUTs for one gesture.
+  volume.addEventListener('input', () => { volumeLabel.textContent = Math.round(Number(volume.value) * 100) + '%'; });
+  volume.addEventListener('change', () => { void write('voice', 'volume', Number(volume.value)); });
+});
+
