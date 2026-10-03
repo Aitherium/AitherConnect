@@ -71,6 +71,34 @@
     return post("/browser/open", { url: String(url) });
   }
 
+  /**
+   * chrome-agent's long-poll: the next agent request for this browser, or null
+   * when the desk had nothing within its wait. {ok:false} = the desk is not there.
+   */
+  async function nextChromeRequest() {
+    let resp;
+    try {
+      resp = await deps.fetch(`${await baseUrl()}/chrome/next`, {
+        method: "GET",
+        signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(30000) : undefined,
+      });
+    } catch {
+      return { ok: false, error: OFFLINE };
+    }
+    if (resp.status === 204) return { ok: true, request: null };
+    if (resp.status === 403 || resp.status === 404) return { ok: false, status: resp.status, error: TOO_OLD };
+    if (!resp.ok) return { ok: false, status: resp.status, error: `awdesk answered HTTP ${resp.status}` };
+    try {
+      return { ok: true, request: await resp.json() };
+    } catch {
+      return { ok: false, error: "awdesk sent an unreadable request" };
+    }
+  }
+
+  function postChromeResult(id, result) {
+    return post("/chrome/result", { id, result });
+  }
+
   function react(emotionOrAnimation) {
     const v = String(emotionOrAnimation || "").trim();
     if (!v) return Promise.resolve({ ok: false, error: "no reaction named" });
@@ -81,5 +109,6 @@
     Object.assign(deps, overrides);
   }
 
-  self.DeskBridge = { speak, sendPage, openInBrowser, react, TOO_OLD, OFFLINE, SELECTION_MAX, _configure };
+  self.DeskBridge = { speak, sendPage, openInBrowser, nextChromeRequest, postChromeResult, react,
+    TOO_OLD, OFFLINE, SELECTION_MAX, _configure };
 })();

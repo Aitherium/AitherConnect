@@ -29,7 +29,15 @@ importScripts("shared/local-endpoints.js",
   // workspace-plane: sign-in record -> workspace, cloud credential, agents, badge.
   "shared/workspace-plane.js",
   // desk-bridge: page context and reactions to the awdesk bridge.
-  "shared/desk-bridge.js");
+  "shared/desk-bridge.js",
+  // chrome-agent: an agent drives an OWNER-APPROVED tab (asks per tab).
+  "shared/chrome-agent.js");
+
+// Agents on the desk may drive a tab of yours ONLY after you allow that tab
+// (chrome-agent.js). The loop long-polls the desk; the alarm restarts it after
+// the service worker sleeps.
+self.ChromeAgent.wire();
+void self.ChromeAgent.start();
 
 // Pairing progress (the code to approve on the desk) reaches the popup and the
 // side panel from here, the one context that runs the pairing flow.
@@ -1849,6 +1857,9 @@ function ensureOidcReauthAlarm() {
 }
 ensureOidcReauthAlarm();
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "chrome-agent") void self.ChromeAgent.start();
+});
+chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== OIDC_REAUTH_ALARM || !self.AitherOIDC) return;
   self.AitherOIDC.refreshIfDue().then((r) => {
     if (r && r.ok && r.record && r.record.user_bearer) {
@@ -2351,6 +2362,7 @@ async function ensureAlarms() {
   // awsync: created unconditionally, gated at TICK time on SETTINGS.syncEnabled.
   chrome.alarms.create(AWSYNC_ALARM, { periodInMinutes: AWSYNC_PERIOD_MINUTES, delayInMinutes: 2 });
   chrome.alarms.create("decisions-poll", { periodInMinutes: 1 });
+  chrome.alarms.create("chrome-agent", { periodInMinutes: 0.5 });
   await ensureXAlarms();
 }
 
