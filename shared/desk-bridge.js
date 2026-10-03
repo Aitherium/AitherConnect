@@ -3,7 +3,8 @@
  * or react, and push the current page into the desk as context.
  *
  * awdesk trusts this extension's pinned origin on exactly these routes
- * (/speak, /events, /desktop/*, /console/open, /decisions, /health); fleet
+ * (/speak, /events, /desktop/*, /console/open, /browser/open, /decisions,
+ * /health); fleet
  * verbs and /command stay behind its bearer. An awdesk older than that answers
  * 403 to a chrome-extension origin, which is reported as "update awdesk".
  */
@@ -62,6 +63,14 @@
     return post("/events", body);
   }
 
+  /** Open an http(s) page in a new tab of the owner's Aither Browser on the desk. */
+  function openInBrowser(url) {
+    if (!/^https?:\/\//i.test(String(url || ""))) {
+      return Promise.resolve({ ok: false, error: "only http(s) pages can be opened in the Aither Browser" });
+    }
+    return post("/browser/open", { url: String(url) });
+  }
+
   function react(emotionOrAnimation) {
     const v = String(emotionOrAnimation || "").trim();
     if (!v) return Promise.resolve({ ok: false, error: "no reaction named" });
@@ -72,5 +81,5 @@
     Object.assign(deps, overrides);
   }
 
-  self.DeskBridge = { speak, sendPage, react, TOO_OLD, OFFLINE, SELECTION_MAX, _configure };
+  self.DeskBridge = { speak, sendPage, openInBrowser, react, TOO_OLD, OFFLINE, SELECTION_MAX, _configure };
 })();

@@ -3902,6 +3902,14 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     title: "Send page to desk",
     contexts: ["selection", "page"],
   });
+  // The desk's own browser (awdesk Aither Browser): this page, or this link, in a
+  // new tab there -- where an agent can work while you watch and take over.
+  chrome.contextMenus.create({
+    id: "desk-open-browser",
+    parentId: "aither-parent",
+    title: "Open in Aither Browser",
+    contexts: ["page", "link"],
+  });
 
   // Post to X — only on x.com/twitter.com. Aither writes the tweet; the
   // extension posts it in THIS logged-in tab (no cookies leave the browser).
@@ -5192,6 +5200,18 @@ const CONTEXT_MENU_PROMPTS = {
 };
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === "desk-open-browser") {
+    const result = await self.DeskBridge.openInBrowser(info.linkUrl || tab?.url || "");
+    if (!result.ok) {
+      chrome.notifications?.create?.({
+        type: "basic",
+        iconUrl: "icons/icon128.png",
+        title: "awconnect",
+        message: result.error || "could not open it in the Aither Browser",
+      });
+    }
+    return;
+  }
   if (info.menuItemId === "desk-say" || info.menuItemId === "desk-send-page") {
     const result = info.menuItemId === "desk-say"
       ? await self.DeskBridge.speak(info.selectionText || "")

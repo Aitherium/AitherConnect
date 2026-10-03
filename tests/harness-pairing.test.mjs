@@ -148,6 +148,13 @@ async function run () {
     check('send page posts a page event to awdesk /events', page.ok && lastSent.url === 'http://127.0.0.1:47931/events' &&
       lastSent.body.type === 'page' && lastSent.body.selection.length === 4000)
     check('non-http pages are not sent', (await DB.sendPage({ url: 'chrome://settings' })).ok === false)
+    const opened = await DB.openInBrowser('https://example.com/a')
+    const openSent = sent[sent.length - 1]
+    check('open in Aither Browser posts the url to awdesk /browser/open', opened.ok &&
+      openSent.url === 'http://127.0.0.1:47931/browser/open' && openSent.body.url === 'https://example.com/a')
+    const before = sent.length
+    check('a non-http page is never sent to the Aither Browser',
+      (await DB.openInBrowser('javascript:alert(1)')).ok === false && sent.length === before)
   }
 
   // ── 3. wiring ────────────────────────────────────────────────────────
@@ -156,6 +163,8 @@ async function run () {
   check('background list-decisions uses HarnessAuth', /case "list-decisions":[\s\S]{0,600}self\.HarnessAuth\.listDecisions/.test(bg))
   check('background no longer hands out a harness token', !/get-harness-token/.test(bg))
   check('background imports desk-bridge.js', /importScripts\([\s\S]*shared\/desk-bridge\.js/.test(bg))
+  check('the Open in Aither Browser menu row is wired to DeskBridge.openInBrowser',
+    /id: "desk-open-browser"/.test(bg) && /menuItemId === "desk-open-browser"[\s\S]{0,200}DeskBridge\.openInBrowser/.test(bg))
   check('popup.html does not load genesis-auth.js', !/genesis-auth\.js/.test(read('popup/popup.html')))
   check('popup.js has no GenesisAuth', !/GenesisAuth/.test(read('popup/popup.js')))
   for (const f of ['background.js', 'popup/popup.html', 'sidepanel/sidepanel.html', 'options/options.html']) {
