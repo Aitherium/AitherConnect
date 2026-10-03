@@ -84,7 +84,7 @@
   }
 
   /**
-   * Where this linked person's HOME is. A tenant user (garg, dgg, jgames, ...)
+   * Where this linked person's HOME is. A tenant user (garg, dgg, ...)
    * is homed on their tenant's portal -- the server decides that from the
    * verified token and says so in `tenant` / `endpoints.portal`. Only an https
    * URL is ever returned, so nothing a bundle carries can open another scheme.
