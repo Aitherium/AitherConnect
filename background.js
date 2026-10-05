@@ -23,6 +23,8 @@ importScripts("shared/local-endpoints.js",
   "shared/extension-id.js", "shared/auth-store.js", "shared/oidc-pkce.js",
   "shared/tier-detect.js", "shared/portal-api.js", "shared/health-debounce.js",
   "shared/aitherbrowser.js", "shared/social-plan.js", "shared/harness-auth.js",
+  // x-outbox: posts owner-approved X threads from this (logged-in) browser.
+  "shared/x-outbox.js",
   "shared/awsync.js", "shared/link-bundle.js", "shared/product-catalog.js",
   // Decisions go through HarnessAuth (awsh) only; the retired Genesis auth
   // module is no longer loaded.
@@ -1480,28 +1482,26 @@ function AITHER_X_PAGE_POSTER(text, imageBase64) {
           try { document.execCommand("selectAll", false, null); document.execCommand("delete", false, null); } catch {}
         }
       }
-      resolve({ ok: true, cleared, attached });
+      // X's "Your post was sent" toast links the new tweet ("View"). Read it
+      // while it is on screen: the outbox needs the URL to reply to it.
+      let statusUrl = "";
+      for (let i = 0; i < 25 && !statusUrl; i++) {
+        const a = document.querySelector('[data-testid="toast"] a[href*="/status/"]');
+        const href = a && a.getAttribute("href");
+        if (href && /\/status\/\d+/.test(href)) statusUrl = new URL(href, location.origin).href;
+        else await sleep(200);
+      }
+      resolve({ ok: true, cleared, attached, statusUrl });
     } catch (e) {
       resolve({ ok: false, reason: "exception", error: String(e).slice(0, 200), attached: false });
     }
   });
 }
 
-async function xPostInTab(tabId, text, imageBase64) {
+async function xPostInTab(tabId, text, imageBase64, composeUrl = "https://x.com/compose/post") {
   // Bring the tab to the compose surface so the composer definitely exists.
   try {
-    await chrome.tabs.update(tabId, { url: "https://x.com/compose/post" });
-    await new Promise((resolve) => {
-      const to = setTimeout(resolve, 7000);
-      chrome.tabs.onUpdated.addListener(function l(id, ch) {
-        if (id === tabId && ch.status === "complete") {
-          clearTimeout(to);
-          chrome.tabs.onUpdated.removeListener(l);
-          resolve();
-        }
-      });
-    });
-    await new Promise((r) => setTimeout(r, 1200));
+    await xNavigate(tabId, composeUrl);
   } catch { /* proceed; the composer may already be present */ }
   try {
     const [res] = await chrome.scripting.executeScript({
@@ -1511,6 +1511,139 @@ async function xPostInTab(tabId, text, imageBase64) {
   } catch (e) {
     return { ok: false, reason: "inject_failed", error: String(e).slice(0, 200), attached: false };
   }
+}
+
+/** Point the tab at `url` and wait for it to load (7 s cap) plus a settle. */
+async function xNavigate(tabId, url) {
+  await chrome.tabs.update(tabId, { url });
+  await new Promise((resolve) => {
+    const to = setTimeout(resolve, 7000);
+    chrome.tabs.onUpdated.addListener(function l(id, ch) {
+      if (id === tabId && ch.status === "complete") {
+        clearTimeout(to);
+        chrome.tabs.onUpdated.removeListener(l);
+        resolve();
+      }
+    });
+  });
+  await new Promise((r) => setTimeout(r, 1200));
+}
+
+// ── X outbox: owner-approved threads, posted from THIS logged-in browser ────
+// There are no X API credentials. Genesis queues each approved X post; this
+// alarm claims one, posts part 1, replies each further part to the previous
+// tweet, and reports the URLs. Genesis never hands a claimed item out twice and
+// shared/x-outbox.js never re-posts: a failure is notified, reported, and left.
+
+const X_OUTBOX_ALARM = "x-outbox";
+const X_OUTBOX_KEY = "xOutboxInFlight";
+
+async function xOutboxBearer() {
+  if (SETTINGS.apiKey) return SETTINGS.apiKey;
+  try {
+    return (self.AitherAuthStore && (await self.AitherAuthStore.getUserBearer())) || "";
+  } catch { return ""; }
+}
+
+async function xOutboxFetch(path, init = {}) {
+  const bearer = await xOutboxBearer();
+  const headers = { ...authHeaders(), Authorization: `Bearer ${bearer}` };
+  return fetch(`${GENESIS_URL}${path}`, { ...init, headers, signal: AbortSignal.timeout(15000) });
+}
+
+async function xOutboxTab() {
+  const tabs = await chrome.tabs.query({ url: ["*://x.com/*", "*://twitter.com/*"] });
+  return (tabs && tabs[0]) || chrome.tabs.create({ url: "https://x.com/home", active: false });
+}
+
+// Page fn (MAIN world): the signed-in account's profile path, e.g. "/aitherium".
+function AITHER_X_PROFILE_PATH() {
+  const a = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+  return (a && a.getAttribute("href")) || "";
+}
+
+// Page fn (MAIN world): the newest tweet by `profilePath` whose text starts with `key`.
+function AITHER_X_FIND_OWN_TWEET(profilePath, key) {
+  return new Promise(async (resolve) => {
+    const norm = (t) => String(t || "").replace(/https?:\/\/\S+/g, " ").replace(/\s+/g, " ").trim();
+    const want = String(key || "").slice(0, 50);
+    for (let i = 0; i < 40 && want; i++) {
+      for (const art of document.querySelectorAll('article[data-testid="tweet"]')) {
+        const text = norm(art.querySelector('[data-testid="tweetText"]')?.innerText);
+        if (!text.startsWith(want)) continue;
+        const link = Array.from(art.querySelectorAll(`a[href^="${profilePath}/status/"]`))
+          .map((x) => x.getAttribute("href")).find((h) => /\/status\/\d+$/.test(h || ""));
+        if (link) { resolve(new URL(link, location.origin).href); return; }
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    resolve("");
+  });
+}
+
+/** The URL of the tweet just posted: the toast link, else the account's replies tab. */
+async function xOutboxStatusUrl(tabId, posted, text) {
+  if (posted && posted.statusUrl) return posted.statusUrl;
+  try {
+    const [p] = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: AITHER_X_PROFILE_PATH });
+    const profile = p && p.result;
+    if (!profile) return "";
+    await xNavigate(tabId, `https://x.com${profile}/with_replies`);
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId }, world: "MAIN", func: AITHER_X_FIND_OWN_TWEET,
+      args: [profile, self.AitherXOutbox.matchKey(text)],
+    });
+    return (r && r.result) || "";
+  } catch (e) {
+    console.warn("[Awconnect] x-outbox: could not read the tweet URL:", e);
+    return "";
+  }
+}
+
+async function xOutboxPost(text, composeUrl) {
+  const tab = await xOutboxTab();
+  const res = await xPostInTab(tab.id, text, null, composeUrl);
+  if (!res.ok) return { ok: false, reason: res.reason || res.error || "post failed" };
+  return { ok: true, url: await xOutboxStatusUrl(tab.id, res, text) };
+}
+
+async function xOutboxTick() {
+  if (!GENESIS_URL || !self.AitherXOutbox) return;
+  // The outbox routes are operator-only: without a credential there is nothing to claim.
+  if (!(await xOutboxBearer())) return;
+  const out = await self.AitherXOutbox.runOutboxTick({
+    fetchNext: async () => {
+      const r = await xOutboxFetch("/social/x/outbox/next");
+      if (!r.ok) {
+        console.debug(`[Awconnect] x-outbox: claim -> HTTP ${r.status}`);
+        return null;
+      }
+      return (await r.json()).item || null;
+    },
+    postFirst: (text) => xOutboxPost(text),
+    postReply: (prevUrl, text) => {
+      const id = self.AitherXOutbox.statusId(prevUrl);
+      if (!id) return { ok: false, reason: `no tweet id in ${prevUrl}` };
+      return xOutboxPost(text, `https://x.com/intent/post?in_reply_to=${id}`);
+    },
+    report: async (body) => {
+      try {
+        const r = await xOutboxFetch("/social/x/posted", { method: "POST", body: JSON.stringify(body) });
+        if (!r.ok) console.warn(`[Awconnect] x-outbox: report ${body.outbox_id} -> HTTP ${r.status}`);
+        return r.status < 500; // a 4xx is a definitive answer; only 5xx/network is retried
+      } catch (e) {
+        console.warn("[Awconnect] x-outbox: report failed, kept for the next tick:", e);
+        return false;
+      }
+    },
+    notify: (msg, ok, url) => xNotify(msg, ok, url),
+    store: {
+      get: async () => (await chrome.storage.local.get([X_OUTBOX_KEY]))[X_OUTBOX_KEY] || null,
+      set: (rec) => chrome.storage.local.set({ [X_OUTBOX_KEY]: rec }),
+      clear: () => chrome.storage.local.remove(X_OUTBOX_KEY),
+    },
+  });
+  if (out.action !== "idle") console.log("[Awconnect] x-outbox:", out);
 }
 
 async function xComposeAndPost(tab) {
@@ -2363,6 +2496,8 @@ async function ensureAlarms() {
   chrome.alarms.create(AWSYNC_ALARM, { periodInMinutes: AWSYNC_PERIOD_MINUTES, delayInMinutes: 2 });
   chrome.alarms.create("decisions-poll", { periodInMinutes: 1 });
   chrome.alarms.create("chrome-agent", { periodInMinutes: 0.5 });
+  // Owner-approved X threads, posted from this browser (xOutboxTick).
+  chrome.alarms.create(X_OUTBOX_ALARM, { periodInMinutes: 1 });
   await ensureXAlarms();
 }
 
@@ -4827,6 +4962,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   // xAutomationMode marker as belt-and-braces.
   if (alarm.name === "decisions-poll") {
     await decisionsPollTick();
+  }
+  if (alarm.name === X_OUTBOX_ALARM) {
+    await xOutboxTick();
   }
 });
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "awconnect — AI Chat & Knowledge Assistant",
-  "version": "3.8.0",
+  "version": "3.9.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1nYgDeFNA9hVNX3QKgD2ywLAhmdSQ+z+ALzYV1wM/l4QGIjKtK3a8jugp5b6Wa3ub6uhwZNxhSDwtROjDCMpfZCjM9UNN1UwP/DaC09a74vPyzx0zMK5BNM/EJn2+v6684cu8mkyvZ3qZ0V7mgd5gzp3w9RcDNlkLfYl5ZudH8RkkrjLUoGltXa+VMKbIzdHvlV2CHbB5B7gxXO8a1E6SqmOKbUinjuq7Mc6cLZBnss8pha53IfFQuzU+vD7YIIbYNPrtcMz2FqoDidi1AdSL6pkJ5cNf7aAKQhkD0qqryNUus3ZgnZy2orCAW8Mo/JzLTNzv5/fGtcGSCM+tpDfaQIDAQAB",
   "description": "AI browsing assistant with a local knowledge base. Bring your own API key (Anthropic, OpenAI, OpenRouter, Gemini, Ollama) — chat, save and search what you read.",
   "minimum_chrome_version": "124",
