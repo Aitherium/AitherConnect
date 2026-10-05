@@ -23,7 +23,9 @@ importScripts("shared/local-endpoints.js",
   "shared/extension-id.js", "shared/auth-store.js", "shared/oidc-pkce.js",
   "shared/tier-detect.js", "shared/portal-api.js", "shared/health-debounce.js",
   "shared/aitherbrowser.js", "shared/social-plan.js", "shared/harness-auth.js",
-  // x-outbox: posts owner-approved X threads from this (logged-in) browser.
+  // x-outbox: posts owner-approved X threads from this logged-in browser
+  // No close-paren characters inside this call: the tests read its argument
+  // list up to the first one.
   "shared/x-outbox.js",
   "shared/awsync.js", "shared/link-bundle.js", "shared/product-catalog.js",
   // Decisions go through HarnessAuth (awsh) only; the retired Genesis auth
