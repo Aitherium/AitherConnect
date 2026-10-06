@@ -260,12 +260,16 @@
   const restoreBtn = document.createElement("button");
   restoreBtn.textContent = "⚡";
   restoreBtn.title = "Show the Aither OS toolbar (drag to move)";
+  // Resting size/opacity raised 2026-10-06: at 14px and .45 opacity the owner
+  // could not FIND the tab after minimizing ("i minimise the awconnect taskbar
+  // but now i cant bring it back") — a restore control nobody can see is a
+  // one-way door.
   restoreBtn.style.cssText = `position:fixed;left:0;top:60%;z-index:${Z + 1};display:none;
-    width:14px;height:44px;padding:0;border-radius:0 8px 8px 0;background:rgba(14,16,20,.85);color:#22d3ee;
-    border:1px solid rgba(34,211,238,.45);border-left:0;cursor:pointer;font-size:10px;line-height:1;
-    opacity:.45;transition:opacity .15s ease,width .15s ease;touch-action:none;`;
-  restoreBtn.addEventListener("mouseenter", () => { restoreBtn.style.opacity = "1"; restoreBtn.style.width = "22px"; });
-  restoreBtn.addEventListener("mouseleave", () => { restoreBtn.style.opacity = ".45"; restoreBtn.style.width = "14px"; });
+    width:18px;height:48px;padding:0;border-radius:0 10px 10px 0;background:rgba(14,16,20,.92);color:#22d3ee;
+    border:1px solid rgba(34,211,238,.65);border-left:0;cursor:pointer;font-size:13px;line-height:1;
+    opacity:.75;transition:opacity .15s ease,width .15s ease;touch-action:none;`;
+  restoreBtn.addEventListener("mouseenter", () => { restoreBtn.style.opacity = "1"; restoreBtn.style.width = "26px"; });
+  restoreBtn.addEventListener("mouseleave", () => { restoreBtn.style.opacity = ".75"; restoreBtn.style.width = "18px"; });
 
   const UI_KEY = "aither-overlay-ui";
   let handleTopPct = 60;
@@ -474,6 +478,21 @@
   try {
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (torn || !msg || msg.action !== "overlay-dismiss") return;
+      /* SUMMON SEMANTICS (owner report 2026-10-06: "i minimise the awconnect
+       * taskbar but now i cant bring it back"). Alt+O and the popup toggle both
+       * land HERE, and pressing them on a MINIMIZED overlay means "give me the
+       * toolbar back" — never "destroy this". Blind teardown was a do-nothing
+       * loop: the minimized flag is PERSISTED (chrome.storage aither-overlay-ui),
+       * so the reinjected overlay came back minimized and the summon appeared to
+       * do nothing, twice in a row. Restore in place instead. */
+      if (minimized) {
+        minimized = false;
+        saveUi();
+        renderMode();
+        showHint("⚡ Aither OS toolbar restored");
+        sendResponse({ ok: true, restored: true });
+        return false;
+      }
       teardown();
       sendResponse({ ok: true });
       return false;
@@ -495,6 +514,28 @@
     if (e.altKey && (e.code === "Backquote" || e.key === "`")) { e.preventDefault(); interactive = !interactive; renderMode(); }
     // Alt+Shift+H hides the overlay entirely (Escape from any weirdness).
     if (e.altKey && e.shiftKey && (e.key === "H" || e.key === "h")) teardown();
+  }, true);
+
+  /* ── Stage Manager: a click on the PAGE is a focus change ──────────────────
+   * The iframe is clipped to the OS's own chrome rects (os-regions), so any
+   * pointerdown that reaches THIS document missed every piece of OS chrome —
+   * dock, windows, menus. That is the background click, and macOS Stage Manager
+   * answers exactly this gesture: the moment attention leaves, the windows
+   * sweep aside. The OS (desktop.tsx) collapses its window layer into the stage
+   * strip on `os-host-focus`; clicking the dock or a strip chip brings it back,
+   * and transient menus (the site chip's action panel) close on the same
+   * signal. Our own controls are the one page-side click that is still the OS,
+   * so they are exempt.
+   *
+   * Capture phase: registered ahead of the page's own listeners so a handler
+   * that stops propagation cannot eat the signal. Only posted once the OS is
+   * live (ready) — before that there is no window layer to collapse. */
+  window.addEventListener("pointerdown", (e) => {
+    if (torn || !ready) return;
+    for (const el of [host, hint, minBtn, closeBtn, restoreBtn]) {
+      if (el === e.target || el.contains(e.target)) return;
+    }
+    try { frame.contentWindow.postMessage({ __aither: "os-host-focus", focused: false }, OS_ORIGIN); } catch { /* frame gone */ }
   }, true);
 
   // ── The bridge: OS (iframe) → this page's DOM, and back ──────────────────────
