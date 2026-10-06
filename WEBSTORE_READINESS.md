@@ -6,7 +6,8 @@ clicks. Stable Chrome ignores `--load-extension`. Force-install policy only
 works on managed machines. Nothing was published while writing this report. It
 records what is missing and the exact steps an owner takes to publish.
 
-Measured 2026-09-27 against `develop` (`awconnect/manifest.json` 3.8.0).
+Measured 2026-09-27 against `develop` (`awconnect/manifest.json` 3.8.0);
+store zip rebuilt + verified at current develop 2026-10-06 (`aither-connect-public-v3.9.0.zip`).
 
 ## 1. What the release workflow needs
 
@@ -45,7 +46,7 @@ Workflow gaps to fix before the first automated publish:
 |---|---|---|
 | MV3, no remote code | pass | `script-src 'self' 'wasm-unsafe-eval'` (WASM is allowed). No `eval`/`new Function` in `background.js`. |
 | Broad host access | pass | Host permissions cover loopback, `*.aitherium.com` and `regulations.gov` only. Provider hosts are **optional** and are requested at use time. `Build-Distributions.ps1` refuses a public build that keeps `*://*/*`. |
-| Capture code | pass | `discovery*`, `value-capture`, `api-capture*`, `har-*` are stripped and the build asserts they are gone. |
+| Capture code | pass | `discovery*`, `value-capture`, `api-capture*`, `har-recorder`, `har-relay` are stripped and the build asserts they are gone. (`shared/har-crypto.js` ships by design — it seals HARs for the user-initiated "Send to Aitherium" path, called from `background.js` `harUpload`.) |
 | `version` | ok | The file says 3.6.4, but the builder stamps the manifest.json version into the staged copy, so the zip carries 3.8.0. Keep the two in sync anyway to avoid confusion. |
 | **`cookies` permission** | **risk** | Used to read the `aither_auth_token` cookie on `*.aitherium.com`, which is justifiable. Its other use, `xSessionSync` reading x.com/twitter.com cookies, cannot work in the public build because those hosts are not granted, and a reviewer will ask about it. Justify it as "read the Aitherium sign-in cookie on aitherium.com only", or drop it from the public manifest now that sign-in uses the device-flow token. |
 | `tabs`, `scripting` | needs justification | These are used for side-panel page context and the command bar. Say "reads the active page only when the user asks". |
