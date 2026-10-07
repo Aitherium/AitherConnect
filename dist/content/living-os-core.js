@@ -79,10 +79,17 @@
    *   clipped     live chrome, page pass-through
    *   waiting     ready but no regions yet: inert
    */
+  /** A clip-path that shows nothing (never '' -- that shows everything). */
+  const HIDDEN = 'inset(100%)'
+
   function renderPlan(s) {
     const clip = regionsClipPath(s.regions, s)
     if (!s.ready) return { mode: 'loading', pointer: 'none', clip: '' }
-    if (s.minimized) return clip ? { mode: 'minimized', pointer: 'auto', clip: clip } : { mode: 'minimized', pointer: 'none', clip: '' }
+    // Minimized with nothing but the dock on screen leaves NO rect to show. An empty
+    // clip-path means "unclipped", which drew the WHOLE frame -- dock included, inert
+    // and over the page with the page pad removed (owner, 2026-10-07: "taskbar is not
+    // minimizable and it covers part of the bottom of web pages"). Hide it outright.
+    if (s.minimized) return clip ? { mode: 'minimized', pointer: 'auto', clip: clip } : { mode: 'minimized', pointer: 'none', clip: HIDDEN }
     if (s.interactive) return { mode: 'interactive', pointer: 'auto', clip: '' }
     if (clip) return { mode: 'clipped', pointer: 'auto', clip: clip }
     return { mode: 'waiting', pointer: 'none', clip: '' }
