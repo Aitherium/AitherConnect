@@ -1,8 +1,8 @@
-# Awconnect
+# awconnect
 
 <!-- aither-header:start GENERATED from the ecosystem registry. Edits here are overwritten; change the registry instead. -->
 
-**[Docs](https://aitherium.github.io/AitherConnect/)**  ·  [Source](https://github.com/Aitherium/AitherConnect)  ·  [The Aither World](https://aitherium.github.io/)
+**[Docs](https://aitherium.github.io/AitherConnect/)**  ·  [Source](https://github.com/Aitherium/AitherConnect)  ·  `https://chromewebstore.google.com/detail/awconnect/peeojgjhjficedkncdejbfnacooodbak`  ·  [The Aither World](https://aitherium.github.io/)
 
 > **The Aither World** is an operating system for agents — a Linux you can hand to one, the runtimes it works in, and the tools it works with. [awnix](https://github.com/Aitherium/awnix) is the Linux underneath it; **AitherConnect** is one of its 66 bricks — each installs on its own, runs offline, and needs no account.
 >
@@ -10,37 +10,44 @@
 
 <!-- aither-header:end -->
 
-Browser extension for [AitherOS](https://aitherium.com) — federated AI search, chat, knowledge management, and desktop bridge.
+**Install from the Chrome Web Store:
+https://chromewebstore.google.com/detail/awconnect/peeojgjhjficedkncdejbfnacooodbak**
 
-## Install
+awconnect is the [Aitherium](https://aitherium.com) browser extension: chat with
+your workspace agents or your local awdk daemon with the current page as context,
+and open the Living OS overlay over any tab.
 
-### Chrome / Edge
-1. Download the latest release zip
-2. Extract it
-3. Go to `chrome://extensions` (or `edge://extensions`)
-4. Enable Developer Mode
-5. Click "Load unpacked" and select the extracted folder
+The store build updates itself. Everything below is for people who want to read
+or run the exact code that ships.
 
-### Firefox
-Download the Firefox-specific zip from releases and load it via `about:debugging`.
+## What is in this repository
 
-## Features
-- Federated search across AitherSearch + Nexus knowledge base
-- Chat with AitherOS agents from any browser tab
-- Knowledge base management (create, query, ingest)
-- Image generation via Canvas/ComfyUI
-- Notes with cloud sync and KB integration
-- Page security scanning via Themis
-- IRC relay via AitherRelay
+- `dist/` — the built extension (Manifest V3), exactly what the store package is
+  made from. It keeps the manifest `key`, so loading it unpacked gives the same
+  extension id awdesk and the local daemon trust for an unpacked install.
+- `docs/` — the project page and its machine-readable manifest.
+- `LICENSE`.
 
-## Configuration
-Click the extension icon > Settings to configure connection mode:
-- **Local**: AitherOS on same machine (default, port 3000)
-- **Remote**: AitherOS on LAN/VPN
-- **Cloud**: Hosted AitherOS instance
+### Load the built extension unpacked (developers)
 
-## License
-Copyright (c) Aitherium. All rights reserved.
+1. Open `chrome://extensions` (or `edge://extensions`).
+2. Turn on Developer mode.
+3. Click **Load unpacked** and pick the `dist/` folder.
+
+Use the Web Store install for everyday use; an unpacked copy does not update.
+
+## Where the source lives
+
+This repository is a mirror. The extension is developed in the Aitherium
+monorepo, built on top of the shared `awkit` UI kit, and the built output is
+published here by an automated sync. Hand edits made here are overwritten on the
+next sync.
+
+Store packages are built and uploaded to the Chrome Web Store from the same
+monorepo's release lane; this mirror only syncs and does not create releases of
+its own.
+
+The v3 extension that used to live here is retired.
 
 <!-- aither-ecosystem:start GENERATED from the ecosystem registry. Edits here are overwritten; change the registry instead. -->
 

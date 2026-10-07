@@ -7,7 +7,7 @@ Your agent cannot see the page you are looking at, so you paste it in by hand.
 ## Install
 
 ```
-load unpacked — see the repo
+https://chromewebstore.google.com/detail/awconnect/peeojgjhjficedkncdejbfnacooodbak
 ```
 
 ## Use it in 30 seconds

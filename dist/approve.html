@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>awconnect: allow an agent?</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: dark light; --bg: #0f1218; --fg: #e8eaf0; --muted: #9aa3b2; --line: #2a2f3a; --accent: #7c3aed; }
+  @media (prefers-color-scheme: light) { :root { --bg: #ffffff; --fg: #12151c; --muted: #5b6372; --line: #dfe3ea; } }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  main { padding: 18px 20px; display: grid; gap: 12px; }
+  h1 { font-size: 16px; margin: 0; }
+  .site { font-weight: 700; }
+  .reason { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .row { display: flex; gap: 8px; justify-content: flex-end; }
+  button { height: 34px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg);
+    font: inherit; font-weight: 600; cursor: pointer; }
+  #allow { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+</style>
+  <script type="module" crossorigin src="./assets/approve-CMNYw_5P.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/chromeAgent-Bm4QBbCT.js">
+</head>
+<body>
+  <main>
+    <h1>An agent wants to use one of your tabs</h1>
+    <div>Site: <span id="site" class="site">…</span></div>
+    <div id="reason" class="reason">…</div>
+    <div class="hint">Allow lets it read and fill pages on this site, in the tab you have open there, until that tab
+      goes to another site or closes. Chrome will ask you to confirm the site too. It cannot see your other tabs.</div>
+    <div class="row"><button id="deny">Deny</button><button id="allow">Allow on this site</button></div>
+    <div id="err" class="hint" role="status"></div>
+  </main>
+</body>
+</html>
