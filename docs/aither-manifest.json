@@ -10,5 +10,15 @@
   "pairs_with": [
     "awdk"
   ],
-  "includes": []
+  "includes": [],
+  "metrics": {
+    "files": {
+      "value": 9,
+      "as_of": "2026-10-07T08:11:17-07:00"
+    },
+    "tests": {
+      "value": 0,
+      "as_of": "2026-10-07T08:11:17-07:00"
+    }
+  }
 }
