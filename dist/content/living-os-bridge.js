@@ -193,6 +193,27 @@
     }
   }
 
+  /** ONE THREAD: tell the OS which shared conversation the side panel is in. */
+  function publishThread() {
+    relayToSW('thread-get', {}, (res) => {
+      if (res && typeof res.threadId === 'string' && res.threadId) {
+        postToOs({ __aither: 'os-thread', threadId: res.threadId, source: 'awconnect' })
+      }
+    })
+  }
+  // ...and again whenever the panel moves it (a new or resumed Cloud chat). The OS's own
+  // move comes back stamped source 'os' and is not echoed to it.
+  try {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      const c = areaName === 'local' && changes && changes.awc_os_thread
+      const v = c && c.newValue
+      if (torn || !ready || !v || v.source === 'os' || typeof v.threadId !== 'string') return
+      postToOs({ __aither: 'os-thread', threadId: v.threadId, source: 'awconnect' })
+    })
+  } catch {
+    /* no chrome.storage here (the desk's shim): publishThread on ready still runs */
+  }
+
   // targetOrigin is ALWAYS OS_ORIGIN, never '*': page text and the bearer go only
   // to aitherium.com, never to whatever the host page might frame.
   function postToOs(payload) {
@@ -486,6 +507,13 @@
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (torn || !msg || msg.type !== CONTROL_MESSAGE) return
       if (msg.op === 'ping') sendResponse({ ok: true, ready, interactive, mode: lastMode })
+      else if (msg.op === 'os-command') {
+        // awsh from anywhere: "Open awsh" from the worker's menu. Only the fixed ids the OS
+        // accepts (Veil os-command.ts); anything else is not forwarded.
+        if (!ready || msg.id !== 'awsh.open') return sendResponse({ ok: false })
+        postToOs({ __aither: 'os-command', id: msg.id, args: {}, source: 'awconnect' })
+        sendResponse({ ok: true })
+      }
       else if (msg.op === 'toggle-interactive') {
         setInteractive(!interactive)
         sendResponse({ ok: true, interactive })
@@ -636,6 +664,13 @@
     if (!r) return
     switch (r.kind) {
       case 'ready':
+        // aither-host/1: a new OS says os-hello and learns our planes from host-hello;
+        // an old OS only says os-ready and never asks (it assumes the overlay planes).
+        if (r.hello) {
+          let version = ''
+          try { version = chrome.runtime.getManifest().version } catch { /* desk shim: no manifest */ }
+          postToOs(core.hostHello(version))
+        }
         clearTimeout(readyTimeout)
         sawOs = true
         ready = true
@@ -648,6 +683,10 @@
         publishLocalNode()
         publishSiteAdapter(true)
         startContextWatch()
+        publishThread()
+        return
+      case 'thread':
+        relayToSW('thread-set', { threadId: r.threadId }, () => {})
         return
       case 'regions':
         regions = r.regions

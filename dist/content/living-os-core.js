@@ -16,6 +16,34 @@
   const OS_ORIGIN = 'https://aitherium.com'
   const OS_URL = OS_ORIGIN + '/?mode=overlay'
   const EDGES = ['bottom', 'top', 'left', 'right']
+  /**
+   * aither-host/1 (aither-host-protocol.json beside this file, the same bytes as Veil's
+   * src/components/os copy): the OS says os-hello, the host answers host-hello with the
+   * planes it serves. This bridge serves the full overlay set and leaves the taskbar to
+   * the OS (the frame IS the OS chrome). livingOsCore.test.ts pins both lists to the json.
+   */
+  const PROTOCOL = 'aither-host/1'
+  const HOST_PLANES = Object.freeze([
+    'regions', 'page', 'context', 'identity', 'token', 'node', 'daemon', 'compose', 'site', 'focus', 'interactive',
+    'thread', 'command',
+  ])
+  /** A server conversation id (Genesis session ids, os-thread.ts THREAD_ID). */
+  const THREAD_ID = /^[A-Za-z0-9_.:-]{1,128}$/
+
+  /** The OS message kinds routeOsMessage answers (os-ready is os-hello's legacy alias). */
+  const ROUTED_KINDS = Object.freeze([
+    'os-hello', 'os-ready', 'os-regions', 'os→page', 'os-page-context-request', 'os-node-probe',
+    'os-site-adapter-request', 'os-compose', 'os-daemon-call', 'os-interactive', 'os-identity-request',
+    'os-token-request', 'os-thread',
+  ])
+
+  /** This host's hello. `version` is diagnostics only (the manifest's, when readable). */
+  function hostHello(version) {
+    const out = { __aither: 'host-hello', protocol: PROTOCOL, host: 'awconnect', planes: HOST_PLANES.slice(), chrome: { taskbar: 'os' } }
+    if (typeof version === 'string' && version) out.version = version
+    return out
+  }
+
   /** dock.tsx EDGE_ROOT before the first paint. */
   const DEFAULT_DOCK = Object.freeze({ edge: 'bottom', thickness: 56 })
 
@@ -131,8 +159,11 @@
     if (origin !== OS_ORIGIN) return null
     if (!data || typeof data !== 'object' || data.__aither == null) return null
     switch (data.__aither) {
+      case 'os-hello':
+        // A new OS: answer host-hello. Its planes are what it speaks, kept for diagnostics.
+        return { kind: 'ready', hello: true, planes: Array.isArray(data.planes) ? data.planes.filter((p) => typeof p === 'string') : [] }
       case 'os-ready':
-        return { kind: 'ready' }
+        return { kind: 'ready', hello: false }
       case 'os-regions':
         return Array.isArray(data.regions) ? { kind: 'regions', regions: data.regions, dock: parseDock(data.dock) } : null
       case 'os→page':
@@ -165,6 +196,9 @@
         return { kind: 'identity' }
       case 'os-token-request':
         return { kind: 'token' }
+      case 'os-thread':
+        // ONE THREAD: the OS moved the shared conversation; the worker stores it for the panel.
+        return typeof data.threadId === 'string' && THREAD_ID.test(data.threadId) ? { kind: 'thread', threadId: data.threadId } : null
       default:
         return null
     }
@@ -204,6 +238,10 @@
   const core = {
     OS_ORIGIN,
     OS_URL,
+    PROTOCOL,
+    HOST_PLANES,
+    ROUTED_KINDS,
+    hostHello,
     DEFAULT_DOCK,
     guardedHost,
     isDockRect,
