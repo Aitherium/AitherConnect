@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "awconnect",
   "short_name": "awconnect",
-  "version": "4.1.11",
+  "version": "4.1.12",
   "description": "Aitherium in your browser: chat with your workspace agents or your local awdk daemon, with the current page as context.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1nYgDeFNA9hVNX3QKgD2ywLAhmdSQ+z+ALzYV1wM/l4QGIjKtK3a8jugp5b6Wa3ub6uhwZNxhSDwtROjDCMpfZCjM9UNN1UwP/DaC09a74vPyzx0zMK5BNM/EJn2+v6684cu8mkyvZ3qZ0V7mgd5gzp3w9RcDNlkLfYl5ZudH8RkkrjLUoGltXa+VMKbIzdHvlV2CHbB5B7gxXO8a1E6SqmOKbUinjuq7Mc6cLZBnss8pha53IfFQuzU+vD7YIIbYNPrtcMz2FqoDidi1AdSL6pkJ5cNf7aAKQhkD0qqryNUus3ZgnZy2orCAW8Mo/JzLTNzv5/fGtcGSCM+tpDfaQIDAQAB",
   "minimum_chrome_version": "116",

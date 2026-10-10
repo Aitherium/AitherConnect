@@ -77,7 +77,7 @@
    *   minimized   clipped to the non-dock regions (inert if the dock was all there was)
    *   interactive the whole frame takes input (Alt+` / Alt+O / os-interactive)
    *   clipped     live chrome, page pass-through
-   *   waiting     ready but no regions yet: inert
+   *   waiting     ready but no regions yet: inert AND hidden
    */
   /** A clip-path that shows nothing (never '' -- that shows everything). */
   const HIDDEN = 'inset(100%)'
@@ -92,7 +92,11 @@
     if (s.minimized) return clip ? { mode: 'minimized', pointer: 'auto', clip: clip } : { mode: 'minimized', pointer: 'none', clip: HIDDEN }
     if (s.interactive) return { mode: 'interactive', pointer: 'auto', clip: '' }
     if (clip) return { mode: 'clipped', pointer: 'auto', clip: clip }
-    return { mode: 'waiting', pointer: 'none', clip: '' }
+    // Ready but no regions: HIDDEN, never ''. An unclipped frame paints whatever the OS
+    // draws over the whole page, and inert does not mean invisible -- when the OS lost its
+    // dock (Veil #12280 hid it in overlay mode) the page went blank white under an inert
+    // frame (owner 2026-10-09). The controls still show; the dock appears with its rect.
+    return { mode: 'waiting', pointer: 'none', clip: HIDDEN }
   }
 
   /** Our own controls clear whichever strip the dock occupies; left-anchored (the OS parks the room bottom-right). */
