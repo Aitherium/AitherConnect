@@ -1,4 +1,4 @@
-import{c as _}from"./trash-2-DW8iw_gh.js";function P(t){return t.replace(/\r\n?/g,`
+import{c as _}from"./trash-2-e59XS5Mc.js";function P(t){return t.replace(/\r\n?/g,`
 `).replace(/[ \t]+\n/g,`
 `).replace(/\n{3,}/g,`
 
