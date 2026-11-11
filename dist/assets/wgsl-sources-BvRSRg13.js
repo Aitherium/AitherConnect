@@ -1428,9 +1428,14 @@ fn main(@builtin(workgroup_id) wg_ : vec3<u32>,
 //   - PTQ1_0 block layout ............ ggml/src/ggml-common.h:209-220 (QK_PTQ1_0=128, block_ptq1_0)
 //   - per-element trit accessor ...... ggml/src/ggml-cuda/common.cuh:995-1015
 //
-// THE PTQ1_0 DECODE KERNEL (n_rows == 1). Same dot product as ptq1_0_q8_0_matmul.wgsl,
-// mapped onto the GPU the other way round: LANES threads split ONE output column's K blocks
-// instead of each thread walking a whole column. Structural template: the Q1_0 GEMV that
+// THE PTQ1_0 SPLIT-K KERNEL — decode (n_rows == 1) AND prefill (n_rows > 1). Same dot product
+// as ptq1_0_q8_0_matmul.wgsl, mapped onto the GPU the other way round: LANES threads split ONE
+// output column's K blocks instead of each thread walking a whole column. It was written for
+// decode; since 2026-11-11 the workgroup grid carries a row index too, because the K-tiled
+// kernel was 91% of a Bonsai 2 4B prefill's GPU time (1,746 tokens: 8,099 ms K-tiled against
+// 1,063 ms here, RTX 5090, timestamp-query profile). Each row is computed exactly as the
+// single-row case computes it, so a token's projection is the same number whether it arrives
+// by prefill or by decode. Structural template: the Q1_0 GEMV that
 // lived in restore snapshot 7061518f176 (measured 10x over its K-tiled kernel, 2026-08-15).
 //
 // GEOMETRY WAS MEASURED, NOT GUESSED (RTX 5090, Chrome/Dawn, 2026-11-10, one compute pass of
@@ -1502,14 +1507,15 @@ fn main(@builtin(workgroup_id) wg_ : vec3<u32>,
 //   act_d    : array<vec4<u32>>  — per-32 f16 scales d1 (low 16 bits); one vec4 = one PTQ1 block's 4
 //   act_qs   : array<vec4<u32>>  — per-32 int8 activations, 2 vec4 per q8 block
 //   out      : array<f32>        — [n_cols]
-//   dims     : uniform {K, n_cols, n_rows, col_tiles}  (n_rows, col_tiles unused; one builder
+//   dims     : uniform {K, n_cols, n_rows, col_tiles}  (col_tiles unused; one builder
 //              serves both kernels)
 // act_d/act_qs are typed vec4 for 128-bit loads; K % 128 == 0 makes both buffers a multiple
 // of 16 bytes, so the runtime array length is exact.
 //
-// Dispatch: ceil(n_cols / COLS_PER_WG) workgroups of WG threads (dispatch1D folds into y past
-// 65535). ONLY VALID FOR n_rows == 1 — it writes out[col]. ops.ts ptq1q8Matmul selects on
-// nRows and must keep doing so.
+// Dispatch: n_rows * ceil(n_cols / COLS_PER_WG) workgroups of WG threads, row-major
+// (dispatch1D folds into y past 65535; the tail workgroups of a folded grid have
+// row >= n_rows and write nothing). Row r reads activation blocks [r*K/128, (r+1)*K/128) and
+// writes out[r*n_cols + col].
 
 const QK_PTQ1_0 : u32 = 128u;
 const WORDS_PER_PTQ1 : u32 = 7u;
@@ -1547,11 +1553,17 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>,
   let lane = t % LANES;
   let sub  = t / LANES;
   // Flat index across a possibly-2D grid (dispatch1D folds past 65535 per dimension, which
-  // the lm_head really does exceed).
-  let col = (wid.x + wid.y * nwg.x) * COLS_PER_WG + sub;
+  // the lm_head really does exceed). Workgroups are laid out row-major: \`col_groups\` per
+  // activation row, so flat -> (row, column group). With n_rows == 1 this is the old mapping.
+  let flat = wid.x + wid.y * nwg.x;
+  let col_groups = (dims.n_cols + COLS_PER_WG - 1u) / COLS_PER_WG;
+  let row = flat / col_groups;
+  let col = (flat % col_groups) * COLS_PER_WG + sub;
   let n_ptq1 = dims.K / QK_PTQ1_0;
-  // \`in_range\`, NOT \`active\` — \`active\` is a reserved word in WGSL.
-  let in_range = col < dims.n_cols;
+  // \`in_range\`, NOT \`active\` — \`active\` is a reserved word in WGSL. The row bound matters:
+  // a folded 2-D grid has tail workgroups past the last row.
+  let in_range = col < dims.n_cols && row < dims.n_rows;
+  let ab = row * n_ptq1;                                  // this row's first activation block
 
   var acc_f : f32 = 0.0;
   // The guard is on the ACCUMULATION only, never around a barrier: an out-of-range lane still
@@ -1584,8 +1596,8 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>,
       let h2 = trits4(eh, oh, 9u) & 0xffffu;
       let h3 = trits4(eh, oh, 27u) & 0xffffu;
 
-      let ad = act_d[i];                                  // the block's four d1 (vec4 load)
-      let qb = i * 8u;                                    // 4 q8 blocks x 2 vec4 each
+      let ad = act_d[ab + i];                             // the block's four d1 (vec4 load)
+      let qb = (ab + i) * 8u;                             // 4 q8 blocks x 2 vec4 each
 
       // k = 0: elements 0..31 = qs words 0..3 at digits 0, 1
       var a = act_qs[qb];
@@ -1639,7 +1651,7 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>,
     stride = stride >> 1u;
   }
 
-  if (lane == 0u && in_range) { out[col] = partial[t]; }
+  if (lane == 0u && in_range) { out[row * dims.n_cols + col] = partial[t]; }
 }
 `,h=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
