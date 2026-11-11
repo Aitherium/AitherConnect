@@ -142,7 +142,7 @@ fn main() {
 
   for (var j : u32 = 0u; j < dv; j = j + 1u) { out[j] = o[j]; }
 }
-`,r=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,t=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -192,7 +192,7 @@ fn main(@builtin(workgroup_id) wg_ : vec3<u32>,
   g_out[idx]    = exp(a);            // (0,1]
   beta_out[idx] = 1.0 / (1.0 + exp(-beta_raw[idx]));
 }
-`,t=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,r=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -456,6 +456,106 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>,
   }
 }
 `,s=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+// © 2026 Aitherium, LLC. Original work.
+// Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
+// llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
+// NO third-party Space code (HF Spaces bonsai-* explicitly excluded).
+// Numerics ported from owner-owned fork: github.com/PrismML-Eng/llama.cpp @ prism-b12128
+//   @ d7b28968306207fd176e7ff10796ccb6be607865
+//   - rotation matrix definition ..... src/llama-model.cpp:2335-2349
+//                                      H[r][c] = (-1)^popcount(r&c) / sqrt(N)  (natural-order Sylvester)
+//   - butterfly that actually runs ... ggml/src/ggml-cpu/ops.cpp:12808-12882 (ggml_compute_forward_fwht)
+//   - sign vector semantics .......... src/llama-model.cpp:2365-2405 (one F32 vector per INPUT width)
+//   - forward insertion (activation) . src/llama-graph.cpp:1684-1713  x' = H(s ⊙ x) per block
+//   - inverse (token_embd lookup) .... src/llama-graph.cpp:2681-2684  h  = s ⊙ (H z) per block
+//
+// THE 512-BLOCK TWIN OF fwht_1024.wgsl. Ternary Bonsai 2 2B/4B (prism.hadamard.version 2)
+// declare prism.hadamard.block_size = 512 (measured on Ternary-Bonsai-2-4B-PTQ1_0.gguf,
+// 2026-11-10: widths 2560 / 4096 / 9216 = 5 / 8 / 18 blocks of 512 — 2560 and 9216 are NOT
+// multiples of 1024). fwht_1024.wgsl is left byte-for-byte untouched so the 27B (block 1024)
+// path cannot move; this file differs from it ONLY in the block constants below.
+//
+// Contract (matches the fork bit-for-bit up to f32 rounding order):
+//   forward (inverse = 0):  s[i] = x[i] * (1/sqrt(N)) * sign[i];  butterfly;  out[i] = s[i]
+//   inverse (inverse = 1):  s[i] = x[i] * (1/sqrt(N));  butterfly;  out[i] = s[i] * sign[i]
+//   butterfly: for len = 1, 2, 4, ..., N/2:  pair (j, j+len) with (j / len) even:
+//              (u, v) = (s[j], s[j+len]);  s[j] = u + v;  s[j+len] = u - v      (NO bit reversal)
+//   1/sqrt(512) is NOT exact in f32. The constant is the f32 the fork computes,
+//   \`1.0f / sqrtf(512.0f)\` (ops.cpp:12833) = 0.04419417306780815 (0x3D3504F3), and like the
+//   fork it is a PRE-scale applied to every element before the butterfly (ops.cpp:12842-12844).
+//   The sign multiply is exact, so applying it after the pre-scale is the fork's result too.
+//
+// Buffers / uniform: identical to fwht_1024.wgsl (x read, signs read, out read_write, dims
+// { K, n_rows, sign_offset, inverse }), K a multiple of 512 — the caller validates and THROWS.
+//
+// Dispatch: n_rows * (K / 512) workgroups of 256 threads. workgroup wg -> row = wg / n_blk,
+// b = wg % n_blk. Each thread loads/stores 2 elements and folds 1 butterfly pair per stage.
+
+const N : u32 = 512u;            // prism.hadamard.block_size
+const HALF : u32 = 256u;         // butterfly pairs per stage
+const WG : u32 = 256u;           // threads per workgroup
+const ELEMS_PER_THREAD : u32 = 2u;   // N / WG
+const PAIRS_PER_THREAD : u32 = 1u;   // HALF / WG
+const INV_SQRT_N : f32 = 0.04419417306780815;  // f32(1.0f / sqrtf(512.0f)), fork ops.cpp:12833
+
+struct Dims { K : u32, n_rows : u32, sign_offset : u32, inverse : u32 };
+
+@group(0) @binding(0) var<storage, read>       x     : array<f32>;
+@group(0) @binding(1) var<storage, read>       signs : array<f32>;
+@group(0) @binding(2) var<storage, read_write> out   : array<f32>;
+@group(0) @binding(3) var<uniform>             dims  : Dims;
+
+var<workgroup> s : array<f32, 512>;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid : vec3<u32>,
+        @builtin(workgroup_id) wid : vec3<u32>,
+        @builtin(num_workgroups) nwg : vec3<u32>) {
+  let local = lid.x;                 // 0..255
+  // FLAT INDEX ACROSS A POSSIBLY-2D WORKGROUP GRID (dispatch1D folds past 65535 into y).
+  let wg = wid.x + wid.y * nwg.x;
+  let n_blk = dims.K / N;            // 512-blocks per row (uniform)
+  let row = wg / n_blk;              // uniform across the workgroup
+  if (row >= dims.n_rows) { return; } // uniform: whole workgroup returns or none
+  let b = wg % n_blk;
+  let base  = row * dims.K + b * N;  // first element of this block in x / out
+  let sbase = dims.sign_offset + b * N;
+  let fwd = dims.inverse == 0u;      // uniform
+
+  // Stage the block: pre-scale by 1/sqrt(N) (fork placement), sign FIRST in forward mode.
+  for (var j : u32 = 0u; j < ELEMS_PER_THREAD; j = j + 1u) {
+    let i = local + j * WG;
+    var v = x[base + i] * INV_SQRT_N;
+    if (fwd) { v = v * signs[sbase + i]; }
+    s[i] = v;
+  }
+  workgroupBarrier();
+
+  // Sylvester butterfly, len = 1, 2, 4, ..., 256 — low element u + v, high u - v. 9 stages.
+  var len : u32 = 1u;
+  loop {
+    if (len >= N) { break; }
+    for (var q : u32 = 0u; q < PAIRS_PER_THREAD; q = q + 1u) {
+      let p = local + q * WG;                     // pair index 0..255
+      let j = (p / len) * (len * 2u) + (p % len); // low element of the pair
+      let u = s[j];
+      let v = s[j + len];
+      s[j] = u + v;
+      s[j + len] = u - v;
+    }
+    workgroupBarrier();
+    len = len * 2u;
+  }
+
+  // Write out; sign AFTER the transform in inverse mode (token_embd: h = s ⊙ (H z)).
+  for (var j : u32 = 0u; j < ELEMS_PER_THREAD; j = j + 1u) {
+    let i = local + j * WG;
+    var v = s[i];
+    if (!fwd) { v = v * signs[sbase + i]; }
+    out[base + i] = v;
+  }
+}
+`,d=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 //
 // The four ops the Flux2 MMDiT needs that the LLM kernels do not provide. Every one of
@@ -1004,7 +1104,7 @@ fn copy_strided_main(@builtin(global_invocation_id) gid : vec3<u32>,
   cp_dst[t * cpp.dst_stride + cpp.dst_off + j] =
     cp_src[t * cpp.src_stride + cpp.src_off + j];
 }
-`,d=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,l=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -1108,7 +1208,7 @@ fn main(@builtin(workgroup_id) wg : vec3<u32>, @builtin(local_invocation_id) lid
     }
   }
 }
-`,l=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,u=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -1226,7 +1326,7 @@ fn gather_main(@builtin(global_invocation_id) gid : vec3<u32>,
     i = i + stride;
   }
 }
-`,u=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,c=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -1317,7 +1417,231 @@ fn main(@builtin(workgroup_id) wg_ : vec3<u32>,
     out_w[out_base + e] = f32(ptq1_trit(bb, e)) * d;
   }
 }
-`,c=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,p=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+// © 2026 Aitherium, LLC. Original work.
+// Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
+// llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
+// NO third-party Space code (HF Spaces bonsai-* explicitly excluded).
+// Numerics ported from owner-owned fork: github.com/PrismML-Eng/llama.cpp @ branch "prism"
+//   @ 5d80cff0b8cb9f2bf823cfc4e71e3abb97f290d6
+//   - ptq1_0·q8_0 dot ................ ggml/src/ggml-cpu/quants.c:281-347 (ggml_vec_dot_ptq1_0_q8_0)
+//   - PTQ1_0 block layout ............ ggml/src/ggml-common.h:209-220 (QK_PTQ1_0=128, block_ptq1_0)
+//   - per-element trit accessor ...... ggml/src/ggml-cuda/common.cuh:995-1015
+//
+// THE PTQ1_0 DECODE KERNEL (n_rows == 1). Same dot product as ptq1_0_q8_0_matmul.wgsl,
+// mapped onto the GPU the other way round: LANES threads split ONE output column's K blocks
+// instead of each thread walking a whole column. Structural template: the Q1_0 GEMV that
+// lived in restore snapshot 7061518f176 (measured 10x over its K-tiled kernel, 2026-08-15).
+//
+// GEOMETRY WAS MEASURED, NOT GUESSED (RTX 5090, Chrome/Dawn, 2026-11-10, one compute pass of
+// 200 dispatches, best of 8, random-byte weights at every real Bonsai 2 27B decode shape).
+// Summed over one token's projections (48 DeltaNet + 16 full-attn layers + lm_head):
+//     LANES=16 WG=64  13.2 ms     LANES=8 WG=64  9.8 ms     LANES=8 WG=128  8.7 ms
+//     LANES=4  WG=64   9.0 ms     LANES=4 WG=128 8.5 ms  <- this
+//     an EMPTY kernel at the same grids: 6.5 ms — the per-dispatch floor, not bandwidth,
+//     is now most of what is left. Large shapes run at 0.8-1.4 TB/s (lm_head 5120x248320:
+//     334 us, 831 GB/s); the K-tiled kernel ran 5120x17408 at ~25 GB/s.
+// Fewer lanes win because each lane then walks 10-34 blocks: more independent loads in flight
+// per thread, and a 2-step reduction instead of 4. Staging each round's weights through
+// workgroup memory with fully coalesced loads was also measured and was SLOWER at every
+// shape (the 7 strided loads of a lane's block already hit L1 after the first).
+//
+// WHY: the K-tiled kernel gives thread c column c, so for a single activation row
+// neighbouring lanes read weight addresses n_ptq1*28 bytes apart (1120 B at K=5120) and no
+// load ever coalesces; and with one row it issues ceil(n_cols/64) workgroups — 80 for a
+// 5120-wide projection on a 170-SM card. Here lane l of a column reads block l, lane l+1
+// block l+1: a column's blocks are contiguous, so a column group's loads are one contiguous
+// 28*LANES-byte run, and the grid has n_cols/COLS_PER_WG workgroups.
+//
+// TRIT DECODE — four trits per call, in registers, no loop and no table. The K-tiled kernel
+// decodes each trit with \`trit_digit\`, a loop of n multiplies, 128 times per block.
+// \`v = (v*3) & 0xff\` applied n times is \`(b * 3^n) & 0xff\` (multiplication mod 256 is
+// associative), so digit n of byte b is ((b*3^n mod 256) * 3) >> 8 with a CONSTANT
+// multiplier. That works on two bytes at once in 16-bit lanes of a u32: b*81 <= 20655 and
+// (x mod 256)*3 <= 765 never carry into the neighbouring lane. A 256-entry byte->trits LUT
+// was the alternative; it was NOT used because assembling one packed int8x4 from it costs
+// four random shared-memory reads (bank-conflicted by data-dependent indices) plus the same
+// shift/or work this does in ~14 ALU ops. The decode is pure and exhaustively tested over
+// all 256 byte values x 5 digits x 4 byte positions in __tests__/ptq1-gemv-parity.test.ts.
+//
+// The four decoded trits (t in {0,1,2} per byte) become int8 {-1,0,+1} with
+// ((t | 0x80808080) - 0x01010101) ^ 0x80808080: OR-ing 0x80 into every byte makes the
+// per-byte subtract borrow-free, and the XOR restores the sign bit. dot4I8Packed then does
+// four trit*int8 products in one instruction.
+//
+// ELEMENT ORDER (why the packed words line up with the activation words). Q8 sub-block k
+// pairs with block elements 32k..32k+31; activation word wi holds elements 32k+4wi..+3.
+//   e<80   : byte e&15, digit e>>4      -> 4 consecutive e at one digit = ONE qs word (0..3)
+//   e<120  : byte 16+(t&7), digit t>>3  -> 4 consecutive e at one digit = ONE qs word (4..5)
+//   e>=120 : byte 24+(t&1), digit t>>1  -> e=120..123 = [b24 d0, b25 d0, b24 d1, b25 d1]
+//                                          e=124..127 = [b24 d2, b25 d2, b24 d3, b25 d3]
+// so the 32 activation words of a block pair with (qs word, digit) as:
+//   k=0: w0..3@d0, w0..3@d1     k=1: w0..3@d2, w0..3@d3
+//   k=2: w0..3@d4, w4@d0, w5@d0, w4@d1, w5@d1
+//   k=3: w4@d2, w5@d2, w4@d3, w5@d3, w4@d4, w5@d4, qh[d0|d1], qh[d2|d3]
+//
+// NUMERICS — READ THIS BEFORE CHANGING ANYTHING.
+// Per block this is the K-tiled kernel's arithmetic exactly: each sub-block's acc is an
+// INTEGER (order-free, bit-identical), block_sum = 0 + d1_0*acc_0 + d1_1*acc_1 + ... in k
+// order, and the block contributes d0 * block_sum. What changes is only the f32 SUM ACROSS
+// BLOCKS: the K-tiled kernel sums blocks in ascending i; this sums a lane-strided,
+// tree-reduced order. Same value in exact arithmetic, different f32 rounding — the same
+// owner-approved trade the Q1_0 GEMV made (2026-08-15): bit-identity relaxed to "within a
+// pinned tolerance", asserted by __tests__/ptq1-gemv-parity.test.ts and re-measured on
+// hardware by selftest/webgpu-ptq1-harness.html (case ptq1_0_q8_0_gemv). The tree
+// reduction pairs lanes by id, never by arrival, so the output is deterministic.
+//
+// NON-NEGOTIABLE (unchanged from the K-tiled kernel):
+//   1. block = { u8 qs[24]; u8 qh[2]; f16 d } — d is the LAST 2 bytes (word 6, high half).
+//   2. element e -> (byte, n): e<80: qs[e&15], n=e>>4 | e<120: t=e-80, qs[16+(t&7)], n=t>>3 |
+//      else t=e-120, qh[t&1], n=t>>1.  trit = ((byte*3^n mod 256) * 3) >> 8, value = trit-1.
+//   3. accumulate (trit-1) * q8[lane] in i32 FIRST, then * d1(per-32), sum, then * d0(per-128).
+//
+// Buffers (byte-identical to ptq1_0_q8_0_matmul — same upload, same quantize_q8_0 output):
+//   weights  : array<u32>        — PTQ1_0, 7 words/block (28 B, no repack)
+//   act_d    : array<vec4<u32>>  — per-32 f16 scales d1 (low 16 bits); one vec4 = one PTQ1 block's 4
+//   act_qs   : array<vec4<u32>>  — per-32 int8 activations, 2 vec4 per q8 block
+//   out      : array<f32>        — [n_cols]
+//   dims     : uniform {K, n_cols, n_rows, col_tiles}  (n_rows, col_tiles unused; one builder
+//              serves both kernels)
+// act_d/act_qs are typed vec4 for 128-bit loads; K % 128 == 0 makes both buffers a multiple
+// of 16 bytes, so the runtime array length is exact.
+//
+// Dispatch: ceil(n_cols / COLS_PER_WG) workgroups of WG threads (dispatch1D folds into y past
+// 65535). ONLY VALID FOR n_rows == 1 — it writes out[col]. ops.ts ptq1q8Matmul selects on
+// nRows and must keep doing so.
+
+const QK_PTQ1_0 : u32 = 128u;
+const WORDS_PER_PTQ1 : u32 = 7u;
+const WG : u32 = 128u;
+const LANES : u32 = 4u;                  // threads cooperating on one output column
+const COLS_PER_WG : u32 = WG / LANES;    // output columns per workgroup (32)
+
+struct Dims { K : u32, n_cols : u32, n_rows : u32, col_tiles : u32 };
+
+@group(0) @binding(0) var<storage, read> weights : array<u32>;
+@group(0) @binding(1) var<storage, read> act_d   : array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read> act_qs  : array<vec4<u32>>;
+@group(0) @binding(3) var<storage, read_write> out : array<f32>;
+@group(0) @binding(4) var<uniform> dims : Dims;
+
+var<workgroup> partial : array<f32, WG>;
+
+// Digit n (multiplier p = 3^n) of each of the four bytes of a word, as packed int8 trits
+// {-1,0,+1} in byte order. \`ev\` = word & 0x00ff00ff (bytes 0,2), \`od\` = (word>>8) & 0x00ff00ff
+// (bytes 1,3) — split once per word by the caller, reused for all five digits.
+fn trits4(ev : u32, od : u32, p : u32) -> u32 {
+  let e = ((((ev * p) & 0x00ff00ffu) * 3u) >> 8u) & 0x00030003u;
+  let o = ((((od * p) & 0x00ff00ffu) * 3u) >> 8u) & 0x00030003u;
+  let t = e | (o << 8u);                                  // four trits in {0,1,2}
+  return ((t | 0x80808080u) - 0x01010101u) ^ 0x80808080u; // -> int8 {-1,0,+1}, no borrow
+}
+
+fn d1_of(x : u32) -> f32 { return unpack2x16float(x & 0xffffu).x; }
+
+@compute @workgroup_size(WG)
+fn main(@builtin(local_invocation_id) lid : vec3<u32>,
+        @builtin(workgroup_id) wid : vec3<u32>,
+        @builtin(num_workgroups) nwg : vec3<u32>) {
+  let t = lid.x;
+  let lane = t % LANES;
+  let sub  = t / LANES;
+  // Flat index across a possibly-2D grid (dispatch1D folds past 65535 per dimension, which
+  // the lm_head really does exceed).
+  let col = (wid.x + wid.y * nwg.x) * COLS_PER_WG + sub;
+  let n_ptq1 = dims.K / QK_PTQ1_0;
+  // \`in_range\`, NOT \`active\` — \`active\` is a reserved word in WGSL.
+  let in_range = col < dims.n_cols;
+
+  var acc_f : f32 = 0.0;
+  // The guard is on the ACCUMULATION only, never around a barrier: an out-of-range lane still
+  // reaches every workgroupBarrier below.
+  if (in_range) {
+    var i : u32 = lane;
+    loop {
+      if (i >= n_ptq1) { break; }
+      let wb = (col * n_ptq1 + i) * WORDS_PER_PTQ1;
+      let w0 = weights[wb];
+      let w1 = weights[wb + 1u];
+      let w2 = weights[wb + 2u];
+      let w3 = weights[wb + 3u];
+      let w4 = weights[wb + 4u];
+      let w5 = weights[wb + 5u];
+      let w6 = weights[wb + 6u];
+      let d0 = unpack2x16float(w6 >> 16u).x;              // per-128 weight scale (LAST)
+
+      let e0 = w0 & 0x00ff00ffu; let o0 = (w0 >> 8u) & 0x00ff00ffu;
+      let e1 = w1 & 0x00ff00ffu; let o1 = (w1 >> 8u) & 0x00ff00ffu;
+      let e2 = w2 & 0x00ff00ffu; let o2 = (w2 >> 8u) & 0x00ff00ffu;
+      let e3 = w3 & 0x00ff00ffu; let o3 = (w3 >> 8u) & 0x00ff00ffu;
+      let e4 = w4 & 0x00ff00ffu; let o4 = (w4 >> 8u) & 0x00ff00ffu;
+      let e5 = w5 & 0x00ff00ffu; let o5 = (w5 >> 8u) & 0x00ff00ffu;
+      // qh: bytes 24,25 = the low half of word 6. Bytes 2,3 of the decoded word are garbage
+      // from the scale and are masked off when the two halves are combined below.
+      let eh = w6 & 0x000000ffu; let oh = (w6 >> 8u) & 0x000000ffu;
+      let h0 = trits4(eh, oh, 1u) & 0xffffu;
+      let h1 = trits4(eh, oh, 3u) & 0xffffu;
+      let h2 = trits4(eh, oh, 9u) & 0xffffu;
+      let h3 = trits4(eh, oh, 27u) & 0xffffu;
+
+      let ad = act_d[i];                                  // the block's four d1 (vec4 load)
+      let qb = i * 8u;                                    // 4 q8 blocks x 2 vec4 each
+
+      // k = 0: elements 0..31 = qs words 0..3 at digits 0, 1
+      var a = act_qs[qb];
+      var b = act_qs[qb + 1u];
+      let acc0 = dot4I8Packed(trits4(e0, o0, 1u), a.x) + dot4I8Packed(trits4(e1, o1, 1u), a.y)
+               + dot4I8Packed(trits4(e2, o2, 1u), a.z) + dot4I8Packed(trits4(e3, o3, 1u), a.w)
+               + dot4I8Packed(trits4(e0, o0, 3u), b.x) + dot4I8Packed(trits4(e1, o1, 3u), b.y)
+               + dot4I8Packed(trits4(e2, o2, 3u), b.z) + dot4I8Packed(trits4(e3, o3, 3u), b.w);
+      // k = 1: elements 32..63 = qs words 0..3 at digits 2, 3
+      a = act_qs[qb + 2u];
+      b = act_qs[qb + 3u];
+      let acc1 = dot4I8Packed(trits4(e0, o0, 9u), a.x) + dot4I8Packed(trits4(e1, o1, 9u), a.y)
+               + dot4I8Packed(trits4(e2, o2, 9u), a.z) + dot4I8Packed(trits4(e3, o3, 9u), a.w)
+               + dot4I8Packed(trits4(e0, o0, 27u), b.x) + dot4I8Packed(trits4(e1, o1, 27u), b.y)
+               + dot4I8Packed(trits4(e2, o2, 27u), b.z) + dot4I8Packed(trits4(e3, o3, 27u), b.w);
+      // k = 2: elements 64..79 = words 0..3 at digit 4; 80..95 = words 4,5 at digits 0, 1
+      a = act_qs[qb + 4u];
+      b = act_qs[qb + 5u];
+      let acc2 = dot4I8Packed(trits4(e0, o0, 81u), a.x) + dot4I8Packed(trits4(e1, o1, 81u), a.y)
+               + dot4I8Packed(trits4(e2, o2, 81u), a.z) + dot4I8Packed(trits4(e3, o3, 81u), a.w)
+               + dot4I8Packed(trits4(e4, o4, 1u), b.x) + dot4I8Packed(trits4(e5, o5, 1u), b.y)
+               + dot4I8Packed(trits4(e4, o4, 3u), b.z) + dot4I8Packed(trits4(e5, o5, 3u), b.w);
+      // k = 3: elements 96..119 = words 4,5 at digits 2, 3, 4; 120..127 = qh digits 0..3
+      a = act_qs[qb + 6u];
+      b = act_qs[qb + 7u];
+      let acc3 = dot4I8Packed(trits4(e4, o4, 9u), a.x) + dot4I8Packed(trits4(e5, o5, 9u), a.y)
+               + dot4I8Packed(trits4(e4, o4, 27u), a.z) + dot4I8Packed(trits4(e5, o5, 27u), a.w)
+               + dot4I8Packed(trits4(e4, o4, 81u), b.x) + dot4I8Packed(trits4(e5, o5, 81u), b.y)
+               + dot4I8Packed(h0 | (h1 << 16u), b.z) + dot4I8Packed(h2 | (h3 << 16u), b.w);
+
+      // Exactly the K-tiled kernel's per-block f32 sequence (k ascending from 0.0, then d0).
+      var block_sum : f32 = 0.0;
+      block_sum = block_sum + d1_of(ad.x) * f32(acc0);
+      block_sum = block_sum + d1_of(ad.y) * f32(acc1);
+      block_sum = block_sum + d1_of(ad.z) * f32(acc2);
+      block_sum = block_sum + d1_of(ad.w) * f32(acc3);
+      acc_f = acc_f + d0 * block_sum;
+      i = i + LANES;
+    }
+  }
+
+  partial[t] = acc_f;
+  workgroupBarrier();
+
+  // Tree reduction within each column's LANES slots; pairing fixed by lane id (deterministic).
+  var stride : u32 = LANES >> 1u;
+  loop {
+    if (stride == 0u) { break; }
+    if (lane < stride) { partial[t] = partial[t] + partial[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+
+  if (lane == 0u && in_range) { out[col] = partial[t]; }
+}
+`,h=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -1495,7 +1819,7 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>,
 
   if (valid) { out[row * dims.n_cols + col] = result; }
 }
-`,p=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,m=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -1550,7 +1874,7 @@ fn main(@builtin(workgroup_id) wg_ : vec3<u32>,
     out_w[out_base + j] = select(-d, d, bit == 1u);
   }
 }
-`,h=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,g=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -1696,7 +2020,7 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>,
 
   if (valid) { out[row * dims.n_cols + col] = result; }
 }
-`,m=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,_=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -1755,7 +2079,7 @@ fn main(@builtin(workgroup_id) wg_ : vec3<u32>,
     out_w[out_base + j] = f32(i32(q) - 1) * d;
   }
 }
-`,g=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,f=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -1912,7 +2236,7 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>,
 
   if (valid) { out[row * dims.n_cols + col] = result; }
 }
-`,_=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,b=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -1994,7 +2318,7 @@ fn main(@builtin(workgroup_id) wg : vec3<u32>, @builtin(local_invocation_id) lid
     }
   }
 }
-`,b=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,w=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -2056,7 +2380,7 @@ fn main(@builtin(workgroup_id) wg : vec3<u32>, @builtin(local_invocation_id) lid
     o = o + WG;
   }
 }
-`,f=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,k=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -2126,7 +2450,7 @@ fn main(@builtin(workgroup_id) wg_ : vec3<u32>,
   data[i0] = x0 * c - x1 * s;
   data[i1] = x0 * s + x1 * c;
 }
-`,w=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,v=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -2184,7 +2508,7 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>) {
     maxval[0] = best_val[0];
   }
 }
-`,k=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,y=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -2243,7 +2567,7 @@ fn main() {
   let inv = select(0.0, 1.0 / l, l > 0.0);
   for (var d : u32 = 0u; d < hd; d = d + 1u) { out[d] = acc[d] * inv; }
 }
-`,v=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,x=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -2445,7 +2769,7 @@ fn main(@builtin(workgroup_id) wg_ : vec3<u32>,
     if (d < hd) { out[q_base + d] = acc[i] * inv; }
   }
 }
-`,y=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,P=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation — WGSL kernels ported from the PrismML
 // llama.cpp fork (github.com/PrismML-Eng/llama.cpp @ prism, Aitherium/PrismML-owned).
@@ -2475,7 +2799,7 @@ fn main(@builtin(workgroup_id) wg_ : vec3<u32>,
   if (i >= n) { return; }
   out[i] = silu(gate[i]) * up[i];
 }
-`,x=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
+`,E=`// SPDX-License-Identifier: LicenseRef-Aitherium-Proprietary
 // © 2026 Aitherium, LLC. Original work.
 // Original Aitherium WebGPU implementation.
 //
@@ -2701,4 +3025,4 @@ fn upsample_nearest_main(@builtin(global_invocation_id) gid : vec3<u32>,
   let sy = oy / up.scale;
   uy[idx] = ux[ch * up.h * up.w + sy * up.w + sx];
 }
-`,P={causal_conv1d:e,deltanet:n,deltanet_gate:r,deltanet_seq:t,elementwise:i,elementwise_inplace:a,fwht_1024:o,image_ops:s,kv_quant_4bit:d,logit_topk:l,ptq1_0_dequant:u,ptq1_0_q8_0_matmul:c,q1_0_dequant:p,q1_0_q8_0_matmul:h,q2_0_dequant:m,q2_0_q8_0_matmul:g,quantize_q8_0:_,rmsnorm:b,rope_imrope:f,sampling:w,softmax_attn:k,softmax_attn_batched:v,swiglu:y,vae_ops:x};export{P as WGSL_SOURCES};
+`,q={causal_conv1d:e,deltanet:n,deltanet_gate:t,deltanet_seq:r,elementwise:i,elementwise_inplace:a,fwht_1024:o,fwht_512:s,image_ops:d,kv_quant_4bit:l,logit_topk:u,ptq1_0_dequant:c,ptq1_0_q8_0_gemv:p,ptq1_0_q8_0_matmul:h,q1_0_dequant:m,q1_0_q8_0_matmul:g,q2_0_dequant:_,q2_0_q8_0_matmul:f,quantize_q8_0:b,rmsnorm:w,rope_imrope:k,sampling:v,softmax_attn:y,softmax_attn_batched:x,swiglu:P,vae_ops:E};export{q as WGSL_SOURCES};
