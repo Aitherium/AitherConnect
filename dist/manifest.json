@@ -39,6 +39,12 @@
       },
       "description": "Send the selected text to awconnect Chat"
     },
+    "aither-assist": {
+      "suggested_key": {
+        "default": "Alt+Shift+J"
+      },
+      "description": "Aither: help me write here"
+    },
     "toggle-overlay": {
       "suggested_key": {
         "default": "Alt+O"
